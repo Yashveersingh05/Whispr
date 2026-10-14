@@ -66,7 +66,7 @@ const getUser = (req) => db.users.find((u) => u.id === req.user.id);
 const members = (chat) => chat.memberIds.map((memberId) => db.users.find((u) => u.id === memberId)).filter(Boolean);
 const peer = (chat, userId) => members(chat).find((u) => u.id !== userId);
 function chatView(chat, userId) {
-  const last = db.messages.filter((m) => m.chatId === chat.id).at(-1);
+  const last = db.messages.filter((m) => m.chatId === chat.id && !(m.deletedFor || []).includes(userId)).at(-1);
   const other = peer(chat, userId);
   return { ...chat, participants: members(chat).map(publicUser), title: chat.isGroup ? chat.name : other?.name || 'Unknown user', avatar: chat.isGroup ? null : other?.avatar || null, online: !chat.isGroup && !!other && onlineUsers.has(other.id), lastMessage: last || null };
 }
@@ -155,15 +155,34 @@ app.post('/api/chats', authorize, async (req, res) => {
   for (const memberId of ids) io.in(`user:${memberId}`).socketsJoin(`chat:${chat.id}`);
   res.status(201).json(chatView(chat, req.user.id));
 });
-app.get('/api/chats/:chatId/messages', authorize, (req, res) => { const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c) return res.status(404).json({ error: 'Chat not found.' }); res.json(db.messages.filter((m) => m.chatId === c.id).map((m) => ({ ...m, sender: publicUser(db.users.find((u) => u.id === m.senderId)) }))); });
+app.get('/api/chats/:chatId/messages', authorize, (req, res) => { const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c) return res.status(404).json({ error: 'Chat not found.' }); res.json(db.messages.filter((m) => m.chatId === c.id && !(m.deletedFor || []).includes(req.user.id)).map((m) => ({ ...m, deliveredTo: m.deliveredTo || [], readBy: m.readBy || [], deletedFor: m.deletedFor || [], sender: publicUser(db.users.find((u) => u.id === m.senderId)) }))); });
 app.post('/api/chats/:chatId/messages', authorize, async (req, res) => {
   const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); const body = String(req.body.body || '').trim();
   if (!c) return res.status(404).json({ error: 'Chat not found.' }); if (!body) return res.status(400).json({ error: 'Message cannot be empty.' });
   const clientId = String(req.body.clientId || '').slice(0, 80);
   const existing = clientId && db.messages.find((m) => m.chatId === c.id && m.senderId === req.user.id && m.clientId === clientId);
   if (existing) return res.json({ ...existing, sender: publicUser(db.users.find((u) => u.id === existing.senderId)) });
-  const message = { id: id(), clientId: clientId || null, chatId: c.id, senderId: req.user.id, body, createdAt: new Date().toISOString() }; db.messages.push(message); await save();
+  const message = { id: id(), clientId: clientId || null, chatId: c.id, senderId: req.user.id, body, createdAt: new Date().toISOString(), deliveredTo: c.memberIds.filter((memberId) => memberId !== req.user.id && onlineUsers.has(memberId)), readBy: [], deletedFor: [] }; db.messages.push(message); await save();
   const result = { ...message, sender: publicUser(getUser(req)) }; io.to(`chat:${c.id}`).emit('message:new', result); res.status(201).json(result);
+});
+app.delete('/api/chats/:chatId/messages/:messageId', authorize, async (req, res) => {
+  const chat = db.chats.find((item) => item.id === req.params.chatId && item.memberIds.includes(req.user.id));
+  const message = db.messages.find((item) => item.id === req.params.messageId && item.chatId === req.params.chatId);
+  if (!chat || !message) return res.status(404).json({ error: 'Message not found.' });
+  const scope = req.body?.scope;
+  if (scope === 'me') {
+    message.deletedFor ||= [];
+    if (!message.deletedFor.includes(req.user.id)) message.deletedFor.push(req.user.id);
+    await save();
+    io.to(`user:${req.user.id}`).emit('message:deleted', { chatId: chat.id, messageId: message.id, scope: 'me', userId: req.user.id });
+    return res.json({ ok: true });
+  }
+  if (scope !== 'everyone') return res.status(400).json({ error: 'Choose whether to delete the message for you or everyone.' });
+  if (message.senderId !== req.user.id) return res.status(403).json({ error: 'Only the sender can delete a message for everyone.' });
+  if (!message.deletedForEveryone) { message.deletedForEveryone = true; message.deletedAt = new Date().toISOString(); message.body = ''; await save(); }
+  const payload = { chatId: chat.id, messageId: message.id, scope: 'everyone', message: { ...message, sender: publicUser(db.users.find((user) => user.id === message.senderId)) } };
+  io.to(`chat:${chat.id}`).emit('message:deleted', payload);
+  res.json({ ok: true });
 });
 app.post('/api/chats/:chatId/files', authorize, (req, res, next) => { if (!db.chats.some((chat) => chat.id === req.params.chatId && chat.memberIds.includes(req.user.id))) return res.status(404).json({ error: 'Chat not found.' }); next(); }, upload.single('file'), async (req, res) => {
   const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c || !req.file) return res.status(400).json({ error: 'A chat and file are required.' });
@@ -189,6 +208,21 @@ io.on('connection', (socket) => {
   db.chats.filter((c) => c.memberIds.includes(uid)).forEach((c) => socket.join(`chat:${c.id}`));
   socket.on('chat:join', ({ chatId }) => { if (socketChat(socket, chatId)) socket.join(`chat:${chatId}`); });
   socket.on('typing', ({ chatId, active }) => { if (socketChat(socket, chatId)) socket.to(`chat:${chatId}`).emit('typing', { chatId, userId: uid, active: !!active }); });
+  socket.on('messages:read', async ({ chatId, messageIds }) => {
+    const chat = socketChat(socket, chatId); if (!chat || !Array.isArray(messageIds)) return;
+    const requested = new Set(messageIds.slice(0, 200).map(String)); const changed = [];
+    for (const message of db.messages) {
+      if (message.chatId !== chatId || message.senderId === uid || !requested.has(message.id) || (message.deletedFor || []).includes(uid)) continue;
+      message.deliveredTo ||= []; message.readBy ||= [];
+      let touched = false;
+      if (!message.deliveredTo.includes(uid)) { message.deliveredTo.push(uid); touched = true; }
+      if (!message.readBy.includes(uid)) { message.readBy.push(uid); touched = true; }
+      if (touched) changed.push(message);
+    }
+    if (!changed.length) return;
+    await save();
+    changed.forEach((message) => io.to(`user:${message.senderId}`).emit('message:status', { chatId, messageId: message.id, deliveredTo: message.deliveredTo, readBy: message.readBy }));
+  });
   socket.on('call:offer', async ({ chatId, callId: requestedCallId, offer, video, targetId }) => {
     const c = socketChat(socket, chatId); if (!c || !c.memberIds.includes(targetId) || targetId === uid || !offer) return;
     const callId = String(requestedCallId || id()); const payload = { callId, chatId, offer, video: !!video, from: publicUser(db.users.find((u) => u.id === uid)) };

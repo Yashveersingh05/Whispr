@@ -35,6 +35,22 @@ try {
   assert((await messageReceived).body === 'live delivery', 'new chat message did not reach the other participant');
   const retriedMessage = await request(`/api/chats/${chat.id}/messages`, alice.token, messageOptions);
   assert(retriedMessage.id === sentMessage.id, 'retrying a message created a duplicate');
+  const readReceipt = waitFor(aliceSocket, 'message:status');
+  bobSocket.emit('messages:read', { chatId: chat.id, messageIds: [sentMessage.id] });
+  assert((await readReceipt).readBy.includes(bob.user.id), 'opening a conversation did not record a message as read');
+  const removedOnOtherDevice = waitFor(bobSecondSocket, 'message:deleted');
+  await request(`/api/chats/${chat.id}/messages/${sentMessage.id}`, bob.token, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'me' }) });
+  assert((await removedOnOtherDevice).scope === 'me', 'delete for me did not sync to the user’s other device');
+  assert(!(await request(`/api/chats/${chat.id}/messages`, bob.token)).some((message) => message.id === sentMessage.id), 'delete for me did not hide the message from that user');
+  assert((await request(`/api/chats/${chat.id}/messages`, alice.token)).some((message) => message.id === sentMessage.id), 'delete for me incorrectly deleted the message for the sender');
+  const ownMessage = await request(`/api/chats/${chat.id}/messages`, alice.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: 'remove for everyone' }) });
+  const deletedForEveryone = waitFor(bobSocket, 'message:deleted');
+  const forbiddenDelete = await fetch(`${origin}/api/chats/${chat.id}/messages/${ownMessage.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${bob.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'everyone' }) });
+  assert(forbiddenDelete.status === 403, 'a recipient could delete another user’s message for everyone');
+  await request(`/api/chats/${chat.id}/messages/${ownMessage.id}`, alice.token, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'everyone' }) });
+  assert((await deletedForEveryone).message.deletedForEveryone, 'delete for everyone was not broadcast to the other participant');
+  const tombstone = (await request(`/api/chats/${chat.id}/messages`, bob.token)).find((message) => message.id === ownMessage.id);
+  assert(tombstone?.deletedForEveryone && tombstone.body === '', 'deleted-for-everyone message content was not replaced with a tombstone');
 
   const fileReceived = waitFor(bobSocket, 'file:new');
   const upload = new FormData();
@@ -112,7 +128,7 @@ try {
   const pushSubscription = { endpoint: 'https://fcm.googleapis.com/subscription', keys: { p256dh: 'test-key', auth: 'test-auth' } };
   await request('/api/push/subscriptions', bob.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pushSubscription) });
   await request('/api/push/subscriptions', bob.token, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: pushSubscription.endpoint }) });
-  console.log('PASS: auth, group chats and multi-person call signaling, realtime messages, signed media, resumable calls, multi-device acceptance, and push subscriptions');
+  console.log('PASS: auth, group calls, realtime messaging, read receipts, both message deletion scopes, signed media, resumable calls, and push subscriptions');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

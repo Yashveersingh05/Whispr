@@ -33,7 +33,7 @@ function toast(message, kind = '') {
 function renderChats() {
   const query = $('#chat-search').value.trim().toLocaleLowerCase();
   const visible = chats.filter((chat) => (query === '' || chat.title.toLocaleLowerCase().includes(query) || chat.lastMessage?.body.toLocaleLowerCase().includes(query)) && (window.chatFilter !== 'online' || chat.online));
-  $('#chat-list').innerHTML = visible.length ? visible.map((chat) => `<button class="chat-item ${chat.id === activeChat?.id ? 'active' : ''}" data-chat-id="${esc(chat.id)}"><span class="chat-item-avatar"><span class="avatar-ph">${avatarMarkup({ name: chat.title, avatar: chat.avatar })}</span><i class="status-dot ${chat.online ? 'online' : 'away'}"></i></span><span class="chat-item-body"><span class="chat-item-top"><b>${esc(chat.title)}</b><small>${chat.lastMessage ? clock(chat.lastMessage.createdAt) : ''}</small></span><span class="chat-item-bottom"><span class="chat-preview">${esc(chat.lastMessage?.body || 'No messages yet')}</span></span></span></button>`).join('') : '<p class="list-empty">No conversations match.</p>';
+  $('#chat-list').innerHTML = visible.length ? visible.map((chat) => `<button class="chat-item ${chat.id === activeChat?.id ? 'active' : ''}" data-chat-id="${esc(chat.id)}"><span class="chat-item-avatar"><span class="avatar-ph">${avatarMarkup({ name: chat.title, avatar: chat.avatar })}</span><i class="status-dot ${chat.online ? 'online' : 'away'}"></i></span><span class="chat-item-body"><span class="chat-item-top"><b>${esc(chat.title)}</b><small>${chat.lastMessage ? clock(chat.lastMessage.createdAt) : ''}</small></span><span class="chat-item-bottom"><span class="chat-preview">${esc(chat.lastMessage?.deletedForEveryone ? 'Message deleted' : chat.lastMessage?.body || 'No messages yet')}</span></span></span></button>`).join('') : '<p class="list-empty">No conversations match.</p>';
   document.querySelectorAll('[data-chat-id]').forEach((button) => button.addEventListener('click', () => openChat(button.dataset.chatId)));
 }
 async function loadChats() {
@@ -54,7 +54,33 @@ function renderHeader() {
 function renderMessage(message) {
   const mine = message.senderId === me.id;
   const clientData = message.clientId ? `data-client-id="${esc(message.clientId)}"` : '';
-  return `<article class="msg-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id || '')}" ${clientData}><div class="msg-bubble ${mine ? 'mine' : ''}"><div class="msg-meta"><b>${mine ? 'You' : esc(message.sender?.name || activeChat.title)}</b><time>${clock(message.createdAt)}</time></div><div class="message-text">${esc(message.body)}</div>${message.pending ? '<small class="delivery-state">Sending…</small>' : mine ? '<small class="delivery-state">Sent ✓</small>' : ''}</div></article>`;
+  const recipients = activeChat?.participants.filter((person) => person.id !== message.senderId).map((person) => person.id) || [];
+  const deliveredTo = message.deliveredTo || []; const readBy = message.readBy || [];
+  const status = recipients.length && recipients.every((id) => readBy.includes(id)) ? 'seen' : recipients.length && recipients.every((id) => deliveredTo.includes(id)) ? 'delivered' : 'sent';
+  const statusMarkup = status === 'seen' ? '<span class="message-ticks seen" role="img" aria-label="Seen" title="Seen">✓✓</span>' : status === 'delivered' ? '<span class="message-ticks" role="img" aria-label="Delivered" title="Delivered">✓✓</span>' : '<span class="message-ticks" role="img" aria-label="Sent" title="Sent">✓</span>';
+  const body = message.deletedForEveryone ? `<span class="deleted-message"><i class="fa-solid fa-ban" aria-hidden="true"></i> ${mine ? 'You deleted this message' : 'This message was deleted'}</span>` : esc(message.body);
+  const actions = message.pending ? '' : `<details class="message-actions"><summary aria-label="Message options" title="Message options"><i class="fa-solid fa-ellipsis" aria-hidden="true"></i></summary><div class="message-action-menu"><button type="button" data-delete-scope="me" data-message-id="${esc(message.id)}">Delete for me</button>${mine && !message.deletedForEveryone ? `<button type="button" data-delete-scope="everyone" data-message-id="${esc(message.id)}">Delete for everyone</button>` : ''}</div></details>`;
+  const receipt = mine ? message.pending ? '<small class="delivery-state">Sending…</small>' : `<small class="delivery-state" data-message-status="${esc(message.id)}">${message.failed ? 'Not sent' : statusMarkup}</small>` : '';
+  return `<article class="msg-row ${mine ? 'mine' : ''} ${message.deletedForEveryone ? 'message-deleted' : ''}" data-message-id="${esc(message.id || '')}" data-sender-id="${esc(message.senderId)}" ${clientData}><div class="msg-bubble ${mine ? 'mine' : ''}"><div class="msg-meta"><b>${mine ? 'You' : esc(message.sender?.name || activeChat.title)}</b><time>${clock(message.createdAt)}</time></div><div class="message-text">${body}</div>${receipt}${actions}</div></article>`;
+}
+async function markMessagesRead(chatId, messageIds) {
+  if (!chatId || !messageIds.length) return;
+  const ids = [...new Set(messageIds)];
+  for (let offset = 0; offset < ids.length; offset += 200) socket.emit('messages:read', { chatId, messageIds: ids.slice(offset, offset + 200) });
+}
+function markVisibleMessagesRead(chatId = activeChat?.id) {
+  if (!chatId || chatId !== activeChat?.id || document.visibilityState !== 'visible') return;
+  const ids = [...$('#messages').querySelectorAll('.msg-row[data-message-id]')].filter((row) => !row.classList.contains('file-message') && row.dataset.senderId !== me.id).map((row) => row.dataset.messageId).filter((id) => id && !id.startsWith('pending-') && !id.startsWith('local-'));
+  markMessagesRead(chatId, ids);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') markVisibleMessagesRead(); });
+function updateMessageStatus({ chatId, messageId, deliveredTo, readBy }) {
+  if (chatId !== activeChat?.id) return;
+  const recipients = (activeChat?.participants || []).filter((person) => person.id !== me.id).map((person) => person.id);
+  const seen = recipients.length > 0 && recipients.every((id) => readBy.includes(id));
+  const delivered = recipients.length > 0 && recipients.every((id) => deliveredTo.includes(id));
+  const node = $(`#messages [data-message-status="${CSS.escape(messageId)}"]`); if (!node) return;
+  node.innerHTML = seen ? '<span class="message-ticks seen" role="img" aria-label="Seen" title="Seen">✓✓</span>' : delivered ? '<span class="message-ticks" role="img" aria-label="Delivered" title="Delivered">✓✓</span>' : '<span class="message-ticks" role="img" aria-label="Sent" title="Sent">✓</span>';
 }
 function renderFileMessage(file) {
   const mine = file.senderId === me.id;
@@ -87,6 +113,7 @@ async function openChat(chatId) {
   const timeline = [...messages.map((item) => ({ ...item, kind: 'message' })), ...sharedFiles.map((item) => ({ ...item, kind: 'file' }))].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   $('#messages').innerHTML = timeline.length ? timeline.map((item) => item.kind === 'file' ? renderFileMessage(item) : renderMessage(item)).join('') : '<p class="empty-state">Start the conversation.</p>';
   $('#messages').scrollTop = $('#messages').scrollHeight;
+  markVisibleMessagesRead(chatId);
   const other = activeChat.participants.find((participant) => participant.id !== me.id);
   $('#conversation-info').innerHTML = `<span class="profile-avatar"><span class="avatar-ph">${avatarMarkup(other || { name: activeChat.title })}</span></span><p class="profile-name">${esc(activeChat.title)}</p><p class="profile-status">${esc(other?.bio || 'No about information')}</p><p class="profile-status">${activeChat.participants.map((person) => esc(person.name)).join(' · ')}</p>`;
   await renderFiles(sharedFiles);
@@ -104,19 +131,44 @@ $('#message-form').addEventListener('submit', async (event) => {
   } catch (error) {
     const pending = $(`#messages [data-client-id="${CSS.escape(clientId)}"]`);
     pending?.classList.add('send-failed');
-    pending?.querySelector('.delivery-state')?.replaceChildren(document.createTextNode('Not sent · retry by resending'));
+    pending?.querySelector('.delivery-state')?.replaceChildren(document.createTextNode('Not sent ✕ · retry by resending'));
     $('#message-input').value ||= body;
     toast(error.message, 'error');
   }
+});
+$('#messages').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-delete-scope]'); if (!button) return;
+  const { deleteScope, messageId } = button.dataset;
+  if (deleteScope === 'everyone' && !confirm('Delete this message for everyone in the conversation?')) return;
+  const chatId = activeChat?.id; if (!chatId || !messageId) return;
+  button.disabled = true;
+  try {
+    await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: deleteScope }) });
+    if (deleteScope === 'me') removeMessageFromView(chatId, messageId);
+  } catch (error) { button.disabled = false; toast(error.message, 'error'); }
+});
+function removeMessageFromView(chatId, messageId) {
+  if (chatId !== activeChat?.id) return;
+  $(`#messages [data-message-id="${CSS.escape(messageId)}"]`)?.remove();
+  if (!$('#messages .msg-row')) $('#messages').innerHTML = '<p class="empty-state">Start the conversation.</p>';
+}
+socket.on('message:deleted', ({ chatId, messageId, scope, userId, message }) => {
+  if (scope === 'me') { if (userId === me.id) removeMessageFromView(chatId, messageId); return; }
+  if (chatId !== activeChat?.id || !message) return;
+  const row = $(`#messages [data-message-id="${CSS.escape(messageId)}"]`);
+  if (row) row.outerHTML = renderMessage(message);
+  loadChats().catch(() => {});
 });
 socket.on('message:new', (message) => {
   if (message.chatId === activeChat?.id) {
     const pending = message.clientId && $(`#messages [data-client-id="${CSS.escape(message.clientId)}"]`);
     if (pending) pending.outerHTML = renderMessage(message);
     else if (!$(`#messages [data-message-id="${CSS.escape(message.id)}"]`)) appendMessage(renderMessage(message), 'data-message-id', message.id);
+    if (message.senderId !== me.id && document.visibilityState === 'visible') markMessagesRead(message.chatId, [message.id]);
   }
   loadChats().catch(() => {});
 });
+socket.on('message:status', updateMessageStatus);
 socket.on('file:new', async (file) => {
   if (file.chatId !== activeChat?.id) return;
   try { const files = await api(`/api/chats/${file.chatId}/files`); const saved = files.find((item) => item.id === file.id); if (saved) appendMessage(renderFileMessage(saved), 'data-file-id', saved.id); await renderFiles(files); }

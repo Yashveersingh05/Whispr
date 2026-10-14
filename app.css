@@ -262,6 +262,20 @@ dialog input,dialog textarea { border:2px solid #111; border-radius:0; backgroun
 .attachment-name { margin-top:7px; font-size:.8rem; overflow-wrap:anywhere; }
 .delivery-state { display:block; margin-top:4px; text-align:right; color:#39362f; font-size:.68rem; font-weight:600; }
 .send-failed .delivery-state { color:#b42318; }
+.delivery-state .message-ticks { display:inline-block; font-size:.9rem; letter-spacing:-.25em; padding-right:.2em; color:#6f6b63; font-weight:900; }
+.delivery-state .message-ticks.seen { color:#0877d1; }
+.msg-bubble { position:relative; padding-right:34px; }
+.message-actions { position:absolute; top:5px; right:5px; z-index:2; }
+.message-actions summary { display:grid; place-items:center; width:25px; height:25px; border:1px solid #111; background:#fffdf7; color:#111; list-style:none; cursor:pointer; }
+.message-actions summary::-webkit-details-marker { display:none; }
+.message-actions summary:hover,.message-actions summary:focus-visible { background:#d7ff00; outline:2px solid #111; }
+.message-action-menu { position:absolute; top:28px; right:0; display:grid; min-width:170px; padding:4px; border:2px solid #111; background:#fffdf7; box-shadow:3px 3px 0 #111; }
+.message-action-menu button { padding:9px 10px; border:0; background:transparent; color:#111; text-align:left; font:inherit; font-size:.82rem; cursor:pointer; white-space:nowrap; }
+.message-action-menu button:hover,.message-action-menu button:focus-visible { background:#d7ff00; outline:1px solid #111; }
+.message-action-menu button:disabled { opacity:.6; }
+.deleted-message { color:#555148; font-style:italic; }
+.message-deleted .message-text { min-width:170px; }
+.send-failed .delivery-state { color:#b42318; }
 .chat-item-top small,.msg-meta time { flex:none; color:#39362f; }
 button:disabled { opacity:.62; cursor:not-allowed; filter:grayscale(.4); }
 .icon-btn-round,.icon-btn-flat,.new-chat-btn,.send-btn,.back-button { color:#111; }
