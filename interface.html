@@ -1,1 +1,71 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Whispr — Chat</title><link rel="stylesheet" href="interface.css"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"></head><body><div class="chat-shell"><aside class="chat-sidebar"><div class="me-row"><div class="me-avatar"><span class="avatar-ph" id="me-initial"></span><span class="status-dot online"></span></div><div class="me-info"><p class="me-name" id="me-name"></p><p class="me-sub">Available</p></div><button class="icon-btn-flat" id="logout" aria-label="Log out"><i class="fa-solid fa-right-from-bracket"></i></button></div><div class="sidebar-search"><i class="fa-solid fa-magnifying-glass"></i><input id="chat-search" placeholder="Search people and chats"><button class="new-chat-btn" id="new-chat" aria-label="New chat"><i class="fa-solid fa-plus"></i></button></div><div class="chat-tabs"><button class="chat-tab active" data-filter="all">All</button><button class="chat-tab" data-filter="online">Online</button></div><div class="chat-list" id="chat-list"></div></aside><main class="chat-main"><header class="chat-main-header" id="chat-header"><div class="empty-header">Choose a conversation</div></header><div class="chat-messages" id="messages"><div class="empty-state">Choose a chat or start a new conversation.</div></div><form class="chat-input-row" id="message-form"><button type="button" class="icon-btn-flat" id="file-button" aria-label="Attach file"><i class="fa-solid fa-paperclip"></i></button><input id="file-input" type="file" hidden><input type="text" class="chat-input" id="message-input" placeholder="Type a message…" disabled autocomplete="off"><button class="send-btn" aria-label="Send" disabled><i class="fa-solid fa-paper-plane"></i></button></form></main><aside class="chat-profile" id="profile"><div class="profile-head"><p class="profile-name">Conversation details</p><p class="profile-status">Select a chat to see participants and shared files.</p></div><div class="profile-section"><div class="profile-section-head"><h4>Shared files</h4></div><div id="files" class="file-list"></div></div><button class="danger-button" id="report" disabled>Report conversation</button></aside></div><dialog id="new-chat-dialog"><form method="dialog" id="new-chat-form"><h2>New conversation</h2><label for="user-picker">Find a person</label><input id="user-picker" placeholder="Search by name or email" autocomplete="off"><div id="user-results"></div><menu><button value="cancel">Cancel</button><button value="default" id="create-chat" disabled>Start chat</button></menu></form></dialog><script src="/socket.io/socket.io.js"></script><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Whispr — Chat</title>
+    <link rel="stylesheet" href="interface.css">
+    <link rel="stylesheet" href="app.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body>
+    <div class="chat-shell">
+        <aside class="chat-sidebar">
+            <div class="me-row">
+                <div class="me-avatar"><span class="avatar-ph" id="me-initial"></span><span
+                        class="status-dot online"></span></div>
+                <div class="me-info">
+                    <p class="me-name" id="me-name"></p>
+                    <p class="me-sub">Available</p>
+                </div><button class="icon-btn-flat" id="logout" aria-label="Log out"><i
+                        class="fa-solid fa-right-from-bracket"></i></button>
+            </div>
+            <div class="sidebar-search"><i class="fa-solid fa-magnifying-glass"></i><input id="chat-search"
+                    placeholder="Search people and chats"><button class="new-chat-btn" id="new-chat"
+                    aria-label="New chat"><i class="fa-solid fa-plus"></i></button></div>
+            <div class="chat-tabs"><button class="chat-tab active" data-filter="all">All</button><button
+                    class="chat-tab" data-filter="online">Online</button></div>
+            <div class="chat-list" id="chat-list"></div>
+        </aside>
+        <main class="chat-main">
+            <header class="chat-main-header" id="chat-header">
+                <div class="empty-header">Choose a conversation</div>
+            </header>
+            <div class="chat-messages" id="messages">
+                <div class="empty-state">Choose a chat or start a new conversation.</div>
+            </div>
+            <form class="chat-input-row" id="message-form"><button type="button" class="icon-btn-flat" id="file-button"
+                    aria-label="Attach file"><i class="fa-solid fa-paperclip"></i></button><input id="file-input"
+                    type="file" hidden><input type="text" class="chat-input" id="message-input"
+                    placeholder="Type a message…" disabled autocomplete="off"><button class="send-btn" aria-label="Send"
+                    disabled><i class="fa-solid fa-paper-plane"></i></button></form>
+        </main>
+        <aside class="chat-profile" id="profile">
+            <div class="profile-head">
+                <p class="profile-name">Conversation details</p>
+                <p class="profile-status">Select a chat to see participants and shared files.</p>
+            </div>
+            <div class="profile-section">
+                <div class="profile-section-head">
+                    <h4>Shared files</h4>
+                </div>
+                <div id="files" class="file-list"></div>
+            </div><button class="danger-button" id="report" disabled>Report conversation</button>
+        </aside>
+    </div>
+    <dialog id="new-chat-dialog">
+        <form method="dialog" id="new-chat-form">
+            <h2>New conversation</h2><label for="user-picker">Find a person</label><input id="user-picker"
+                placeholder="Search by name or email" autocomplete="off">
+            <div id="user-results"></div>
+            <menu><button value="cancel">Cancel</button><button value="default" id="create-chat" disabled>Start
+                    chat</button></menu>
+        </form>
+    </dialog>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -1,1 +1,39 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Whispr Admin</title><link rel="stylesheet" href="admin.css"><link rel="stylesheet" href="app.css"></head><body><main style="max-width:1100px;margin:3rem auto;padding:0 1rem"><header style="display:flex;justify-content:space-between;align-items:center"><div><h1>Whispr administration</h1><p id="admin-name"></p></div><a href="interface.html">Open chat</a></header><section id="metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin:2rem 0"></section><section><h2>Members</h2><div id="admin-users"></div></section><section><h2>Reports</h2><div id="admin-reports"></div></section><section><h2>Platform controls</h2><label><input id="registration-open" type="checkbox"> Allow new registrations</label></section></main><script src="admin.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Whispr Admin</title>
+    <link rel="stylesheet" href="admin.css">
+    <link rel="stylesheet" href="app.css">
+</head>
+
+<body>
+    <main style="max-width:1100px;margin:3rem auto;padding:0 1rem">
+        <header style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+                <h1>Whispr administration</h1>
+                <p id="admin-name"></p>
+            </div><a href="interface.html">Open chat</a>
+        </header>
+        <section id="metrics"
+            style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin:2rem 0">
+        </section>
+        <section>
+            <h2>Members</h2>
+            <div id="admin-users"></div>
+        </section>
+        <section>
+            <h2>Reports</h2>
+            <div id="admin-reports"></div>
+        </section>
+        <section>
+            <h2>Platform controls</h2><label><input id="registration-open" type="checkbox"> Allow new
+                registrations</label>
+        </section>
+    </main>
+    <script src="admin.js"></script>
+</body>
+
+</html>

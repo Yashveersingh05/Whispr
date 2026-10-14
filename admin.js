@@ -1,2 +1,75 @@
-const token = localStorage.getItem('whispr_token'); if (!token) location.replace('login.html'); const api=async(u,o={})=>{const r=await fetch(u,{...o,headers:{Authorization:`Bearer ${token}`,...(o.headers||{})}});const d=r.status===204?null:await r.json();if(!r.ok)throw Error(d.error);return d}; const e=s=>String(s||'').replace(/[&<>"']/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
-(async()=>{try{const [me,s,u,reports]=await Promise.all([api('/api/me'),api('/api/admin/summary'),api('/api/admin/users'),api('/api/admin/reports')]);document.querySelector('#admin-name').textContent=`Signed in as ${me.name}`;document.querySelector('#metrics').innerHTML=Object.entries(s).map(([k,v])=>`<article class="stat-card"><h2>${v}</h2><p>${e(k)}</p></article>`).join('');document.querySelector('#admin-users').innerHTML=u.map(x=>`<p>${e(x.name)} · ${e(x.email)} <button data-delete="${x.id}">Remove</button></p>`).join('')||'<p>No members yet.</p>';document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{if(confirm('Remove this member?')){await api(`/api/admin/users/${b.dataset.delete}`,{method:'DELETE'});location.reload()}});document.querySelector('#admin-reports').innerHTML=reports.map(r=>`<p>${e(r.reason||'No reason supplied')} — ${new Date(r.createdAt).toLocaleString()}</p>`).join('')||'<p>No reports.</p>';const settings=await api('/api/admin/settings').catch(()=>({registrationOpen:true}));const input=document.querySelector('#registration-open');input.checked=settings.registrationOpen;input.onchange=()=>api('/api/admin/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({registrationOpen:input.checked})});}catch(err){document.body.innerHTML=`<main style="padding:3rem"><h1>Admin access unavailable</h1><p>${e(err.message)}</p></main>`}})();
+const token = localStorage.getItem("whispr_token");
+if (!token) location.replace("login.html");
+const api = async (u, o = {}) => {
+  const r = await fetch(u, {
+    ...o,
+    headers: { Authorization: `Bearer ${token}`, ...(o.headers || {}) },
+  });
+  const d = r.status === 204 ? null : await r.json();
+  if (!r.ok) throw Error(d.error);
+  return d;
+};
+const e = (s) =>
+  String(s || "").replace(
+    /[&<>"']/g,
+    (x) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        x
+      ],
+  );
+(async () => {
+  try {
+    const [me, s, u, reports] = await Promise.all([
+      api("/api/me"),
+      api("/api/admin/summary"),
+      api("/api/admin/users"),
+      api("/api/admin/reports"),
+    ]);
+    document.querySelector("#admin-name").textContent =
+      `Signed in as ${me.name}`;
+    document.querySelector("#metrics").innerHTML = Object.entries(s)
+      .map(
+        ([k, v]) =>
+          `<article class="stat-card"><h2>${v}</h2><p>${e(k)}</p></article>`,
+      )
+      .join("");
+    document.querySelector("#admin-users").innerHTML =
+      u
+        .map(
+          (x) =>
+            `<p>${e(x.name)} · ${e(x.email)} <button data-delete="${x.id}">Remove</button></p>`,
+        )
+        .join("") || "<p>No members yet.</p>";
+    document.querySelectorAll("[data-delete]").forEach(
+      (b) =>
+        (b.onclick = async () => {
+          if (confirm("Remove this member?")) {
+            await api(`/api/admin/users/${b.dataset.delete}`, {
+              method: "DELETE",
+            });
+            location.reload();
+          }
+        }),
+    );
+    document.querySelector("#admin-reports").innerHTML =
+      reports
+        .map(
+          (r) =>
+            `<p>${e(r.reason || "No reason supplied")} — ${new Date(r.createdAt).toLocaleString()}</p>`,
+        )
+        .join("") || "<p>No reports.</p>";
+    const settings = await api("/api/admin/settings").catch(() => ({
+      registrationOpen: true,
+    }));
+    const input = document.querySelector("#registration-open");
+    input.checked = settings.registrationOpen;
+    input.onchange = () =>
+      api("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registrationOpen: input.checked }),
+      });
+  } catch (err) {
+    document.body.innerHTML = `<main style="padding:3rem"><h1>Admin access unavailable</h1><p>${e(err.message)}</p></main>`;
+  }
+})();

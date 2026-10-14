@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: whispr
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true

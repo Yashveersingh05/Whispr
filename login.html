@@ -1,1 +1,41 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Whispr</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"></head><body><div class="bg-grid"></div><div class="container"><section class="left"><div class="logo"><img src="logo.png" alt="Whispr"></div><p class="eyebrow"><span class="eyebrow-dot"></span>Private conversations</p><h2>Say it plainly.<br>Read it privately.</h2><p class="tagline">A real-time space for conversations with the people you choose. Create an account to get started.</p></section><main class="right"><div class="card"><h2 id="form-title">Welcome back</h2><p id="form-subtitle">Log in to continue your conversations.</p><form id="auth-form"><label id="name-label" for="name" hidden>Name</label><input id="name" autocomplete="name" placeholder="Your name" hidden><label for="email">Email</label><input id="email" type="email" autocomplete="email" required placeholder="name@example.com"><label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters"><p id="auth-error" role="alert"></p><button class="login-btn" type="submit" id="auth-submit">Log in</button></form><p class="signup" id="switch-copy">New here? <a href="#" id="switch-auth">Create an account</a></p></div></main></div><script src="auth.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Whispr</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+
+<body>
+    <div class="bg-grid"></div>
+    <div class="container">
+        <section class="left">
+            <div class="logo"><img src="logo.png" alt="Whispr"></div>
+            <p class="eyebrow"><span class="eyebrow-dot"></span>Private conversations</p>
+            <h2>Say it plainly.<br>Read it privately.</h2>
+            <p class="tagline">A real-time space for conversations with the people you choose. Create an account to get
+                started.</p>
+        </section>
+        <main class="right">
+            <div class="card">
+                <h2 id="form-title">Welcome back</h2>
+                <p id="form-subtitle">Log in to continue your conversations.</p>
+                <form id="auth-form"><label id="name-label" for="name" hidden>Name</label><input id="name"
+                        autocomplete="name" placeholder="Your name" hidden><label for="email">Email</label><input
+                        id="email" type="email" autocomplete="email" required placeholder="name@example.com"><label
+                        for="password">Password</label><input id="password" type="password"
+                        autocomplete="current-password" required minlength="8" placeholder="At least 8 characters">
+                    <p id="auth-error" role="alert"></p><button class="login-btn" type="submit" id="auth-submit">Log
+                        in</button>
+                </form>
+                <p class="signup" id="switch-copy">New here? <a href="#" id="switch-auth">Create an account</a></p>
+            </div>
+        </main>
+    </div>
+    <script src="auth.js"></script>
+</body>
+
+</html>

@@ -13,6 +13,10 @@ Open `http://localhost:3000`. The first registered account is an administrator. 
 
 ## Deploy
 
-Set `PORT` to the port supplied by the host and set a long, persistent `JWT_SECRET`. The app stores its runtime data in `data/whispr.json` and uploaded files in `uploads/`; attach persistent storage for both directories in production. These are intentionally ignored by Git so no user content is shipped in the repository.
+Whispr is a Node + Socket.IO application. It cannot be deployed as a Netlify static site because Netlify does not run this long-lived server or its WebSocket process. Deploy the repository to a Node host such as Render, Railway, Fly.io, or a VPS instead.
+
+For Render, create a new **Blueprint** from the GitHub repository. The included `render.yaml` supplies the build/start commands and generates `JWT_SECRET`. On other Node hosts, set `PORT` to the host-provided port and set a long, persistent `JWT_SECRET` yourself.
+
+The app stores its runtime data in `data/whispr.json` and uploaded files in `uploads/`; attach persistent storage for both directories in production. These are intentionally ignored by Git so no user content is shipped in the repository.
 
 The included JSON store makes local development simple. Before a multi-instance or high-volume production deployment, replace the store with a managed database and object storage, and serve the app through HTTPS.
