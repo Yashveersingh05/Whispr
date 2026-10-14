@@ -155,3 +155,28 @@ dialog button {
 .call-actions { display: flex; justify-content: center; gap: .75rem; margin-top: 1rem }
 .call-actions button { border-radius: .5rem; border: 0; padding: .7rem 1rem }
 textarea { width: 100%; min-height: 80px; box-sizing: border-box; padding: .6rem }
+
+/* Application-level layout overrides: supports desktop and small screens. */
+.chat-shell { min-height: 100dvh; height: 100dvh; overflow: hidden; }
+.chat-main { min-width: 0; display: grid; grid-template-rows: auto minmax(0,1fr) auto; }
+.chat-messages { min-height: 0; overflow-y: auto; padding: 26px clamp(18px,4vw,64px); }
+.chat-input-row { position: static; width: auto; margin: 0; border-top: 1px solid var(--border); padding: 12px 18px; }
+.chat-profile { overflow-y: auto; min-width: 0; }
+.chat-item { color: inherit; padding: 9px; border-radius: 12px; }
+.chat-item.active { background: rgba(139,92,246,.17); }
+.avatar-ph { display: grid; place-items: center; background: linear-gradient(135deg,#6d28d9,#db2777); animation: none; overflow: hidden; }
+.me-avatar { width: 46px; height: 46px; }
+.profile-head { padding: 30px 20px 22px; }
+.profile-name { word-break: break-word; }
+.msg-row { max-width: 78%; }
+.msg-bubble { word-break: break-word; }
+.dialog-error,#profile-error { min-height: 1.2rem; color: #ef4444; font-size: .9rem; }
+.call-content { position: relative; width: min(900px, 92vw); min-width: 0; min-height: min(600px, 78vh); display: grid; place-items: center; }
+.call-content #remote-video { width: min(100%, 840px); max-width: 100%; max-height: 65vh; object-fit: contain; }
+.call-content #local-video { object-fit: cover; width: 180px; height: 125px; max-width: 30%; right: 22px; bottom: 74px; }
+.call-actions button { color: #111827; }
+@media (max-width: 1024px) { .chat-shell { grid-template-columns: 300px minmax(0,1fr); } .chat-profile { display: none; } }
+@media (max-width: 720px) { body { overflow: auto; } .chat-shell { display: block; height: 100dvh; } .chat-sidebar { height: 100dvh; } .chat-main { display: none; height: 100dvh; } .chat-shell.chat-open .chat-sidebar { display: none; } .chat-shell.chat-open .chat-main { display: grid; } .chat-main-header::before { content: '‹'; display: grid; place-items: center; width: 28px; height: 28px; font-size: 32px; cursor: pointer; } .chat-messages { padding: 16px; } .msg-row { max-width: 88%; } .chat-input-row { padding: 10px; } }
+
+/* Keep both panes usable instead of hiding the conversation on narrow laptop windows. */
+@media (max-width: 720px) and (min-width: 520px) { .chat-shell { display: grid; grid-template-columns: 250px minmax(0,1fr); } .chat-sidebar { display: flex; height: 100dvh; } .chat-main { display: grid; height: 100dvh; } }
