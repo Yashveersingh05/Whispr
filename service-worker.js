@@ -12,8 +12,8 @@ self.addEventListener('push', (event) => {
     if (!payload.chatId) return;
     const clientsList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     if (clientsList.some((client) => client.visibilityState === 'visible')) return;
-    await self.registration.showNotification(payload.video ? 'Incoming video call' : 'Incoming voice call', {
-      body: `${payload.from || 'Someone'} is calling you`,
+    await self.registration.showNotification(payload.group ? `Group ${payload.video ? 'video' : 'voice'} call` : payload.video ? 'Incoming video call' : 'Incoming voice call', {
+      body: payload.group ? `${payload.from || 'Someone'} started a call in ${payload.groupName || 'a group'}` : `${payload.from || 'Someone'} is calling you`,
       icon: '/logo.png',
       badge: '/logo.png',
       tag,

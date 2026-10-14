@@ -46,6 +46,8 @@ const save = () => {
 const id = () => crypto.randomUUID();
 const publicUser = (u) => u && ({ id: u.id, name: u.name, email: u.email, avatar: u.avatar ? `/avatars/${u.id}` : null, bio: u.bio || '', role: u.role, createdAt: u.createdAt, online: onlineUsers.has(u.id), lastSeen: u.lastSeen || null });
 const onlineUsers = new Map();
+const groupCalls = new Map();
+const activeGroupCallsByChat = new Map();
 const tokenFor = (u) => jwt.sign({ id: u.id }, secret, { expiresIn: '7d' });
 const mediaUrl = (file, userId) => `/media/${file.id}?token=${encodeURIComponent(jwt.sign({ scope: 'media', fileId: file.id, userId }, secret, { expiresIn: '30m' }))}`;
 async function pushToUser(userId, payload, ttl = 60) {
@@ -75,6 +77,14 @@ function authorize(req, res, next) {
 function admin(req, res, next) { const u = getUser(req); if (u?.role === 'admin') next(); else res.status(403).json({ error: 'Admin access required.' }); }
 function emitPresence(userId) { io.emit('presence', { userId, online: onlineUsers.has(userId) }); }
 function socketChat(socket, chatId) { return db.chats.find((c) => c.id === chatId && c.memberIds.includes(socket.user.id)); }
+function groupCallRoom(callId) { return `group-call:${callId}`; }
+function groupCallView(call) { return { callId: call.id, chatId: call.chatId, video: call.video, groupName: call.name, participants: [...call.participants.keys()].map((userId) => publicUser(db.users.find((user) => user.id === userId))).filter(Boolean) }; }
+function removeGroupCallParticipant(call, userId) {
+  if (!call.participants.has(userId)) return;
+  call.participants.delete(userId);
+  io.to(groupCallRoom(call.id)).emit('group-call:participant-left', { callId: call.id, userId });
+  if (!call.participants.size) { groupCalls.delete(call.id); activeGroupCallsByChat.delete(call.chatId); }
+}
 
 app.use(express.json());
 app.get('/avatars/:userId', (req, res) => { const user = db.users.find((u) => u.id === req.params.userId && u.avatar); if (!user) return res.sendStatus(404); res.sendFile(path.join(uploadDir, path.basename(user.avatar)), { headers: { 'Content-Type': user.avatarMime || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=60' } }); });
@@ -120,7 +130,13 @@ app.post('/api/push/subscriptions', authorize, async (req, res) => {
   db.pushSubscriptions.push({ userId: req.user.id, subscription }); await save(); res.status(201).json({ ok: true });
 });
 app.delete('/api/push/subscriptions', authorize, async (req, res) => { const endpoint = String(req.body?.endpoint || ''); db.pushSubscriptions = db.pushSubscriptions.filter((item) => item.userId !== req.user.id || item.subscription.endpoint !== endpoint); await save(); res.status(204).end(); });
-app.get('/api/calls/pending/:callId', authorize, (req, res) => { const pending = pendingCalls.get(req.params.callId); if (!pending || pending.toUserId !== req.user.id || pending.expiresAt < Date.now()) return res.sendStatus(404); res.set('Cache-Control', 'no-store').json(pending.payload); });
+app.get('/api/calls/pending/:callId', authorize, (req, res) => {
+  const pending = pendingCalls.get(req.params.callId);
+  if (pending && pending.toUserId === req.user.id && pending.expiresAt >= Date.now()) return res.set('Cache-Control', 'no-store').json(pending.payload);
+  const groupCall = groupCalls.get(req.params.callId); const chat = groupCall && db.chats.find((item) => item.id === groupCall.chatId && item.memberIds.includes(req.user.id));
+  if (groupCall && chat) return res.set('Cache-Control', 'no-store').json({ type: 'group', ...groupCallView(groupCall), from: publicUser(db.users.find((user) => user.id === groupCall.hostId)) });
+  res.sendStatus(404);
+});
 app.patch('/api/me', authorize, async (req, res) => { const u = getUser(req); const name = String(req.body.name || '').trim(); if (!name) return res.status(400).json({ error: 'Name is required.' }); u.name = name; u.bio = String(req.body.bio || '').trim().slice(0, 160); await save(); res.json(publicUser(u)); });
 app.post('/api/me/avatar', authorize, upload.single('avatar'), async (req, res) => { if (!req.file || !['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'].includes(req.file.mimetype)) return res.status(400).json({ error: 'Choose a JPEG, PNG, GIF, WebP, or AVIF image.' }); const u = getUser(req); u.avatar = `/uploads/${req.file.filename}`; u.avatarMime = req.file.mimetype; await save(); res.json(publicUser(u)); });
 
@@ -184,7 +200,37 @@ io.on('connection', (socket) => {
   socket.on('call:answer', async ({ chatId, callId, answer, targetId }) => { const c = socketChat(socket, chatId); if (c?.memberIds.includes(targetId)) { const pending = callId && pendingCalls.get(callId); if (pending) { pending.iceCandidates.forEach((candidate) => socket.emit('call:ice', { chatId, callId, candidate, from: targetId })); pendingCalls.delete(callId); } io.to(`user:${targetId}`).emit('call:answer', { chatId, callId, answer, from: uid }); socket.to(`user:${uid}`).emit('call:answered-elsewhere', { chatId, callId, from: targetId }); await pushToUser(uid, { callId, dismissed: true }); } });
   socket.on('call:ice', ({ chatId, callId, candidate, targetId }) => { const c = socketChat(socket, chatId); if (!c?.memberIds.includes(targetId)) return; const pending = callId && pendingCalls.get(callId); if (pending && pending.payload.from.id === uid && pending.toUserId === targetId) pending.iceCandidates.push(candidate); else io.to(`user:${targetId}`).emit('call:ice', { chatId, callId, candidate, from: uid }); });
   socket.on('call:end', async ({ chatId, callId, targetId }) => { const c = socketChat(socket, chatId); if (!c?.memberIds.includes(targetId)) return; const pending = callId && pendingCalls.get(callId); if (pending?.toUserId === uid) { pendingCalls.delete(callId); socket.to(`user:${uid}`).emit('call:answered-elsewhere', { chatId, callId, from: pending.payload.from.id }); io.to(`user:${targetId}`).emit('call:end', { chatId, callId, from: uid }); await Promise.all([pushToUser(uid, { callId, dismissed: true }), pushToUser(targetId, { callId, dismissed: true })]); } else { if (callId) pendingCalls.delete(callId); io.to(`user:${targetId}`).emit('call:end', { chatId, callId, from: uid }); await pushToUser(targetId, { callId, dismissed: true }); } });
-  socket.on('disconnect', async () => { const n = (onlineUsers.get(uid) || 1) - 1; if (n) onlineUsers.set(uid, n); else { onlineUsers.delete(uid); const u = db.users.find((x) => x.id === uid); if (u) { u.lastSeen = new Date().toISOString(); await save(); } emitPresence(uid); } });
+  socket.on('group-call:start', async ({ chatId, callId: requestedCallId, video }) => {
+    const chat = socketChat(socket, chatId); if (!chat?.isGroup || chat.memberIds.length < 2) return socket.emit('group-call:error', { message: 'Group calls need a valid group chat.' });
+    const activeId = activeGroupCallsByChat.get(chatId); const activeCall = activeId && groupCalls.get(activeId);
+    if (activeCall) return socket.emit('group-call:already-active', groupCallView(activeCall));
+    const callId = String(requestedCallId || id()); const groupCall = { id: callId, chatId, name: chat.name, hostId: uid, video: !!video, participants: new Map([[uid, socket.id]]), createdAt: Date.now() };
+    groupCalls.set(callId, groupCall); activeGroupCallsByChat.set(chatId, callId); socket.join(groupCallRoom(callId));
+    socket.emit('group-call:participants', { callId, participants: [] });
+    const payload = { type: 'group', callId, chatId, video: groupCall.video, groupName: chat.name, from: publicUser(db.users.find((user) => user.id === uid)) };
+    await Promise.all(chat.memberIds.filter((memberId) => memberId !== uid).map(async (memberId) => {
+      io.to(`user:${memberId}`).emit('group-call:incoming', payload);
+      await pushToUser(memberId, { callId, chatId, from: payload.from.name, groupName: chat.name, video: groupCall.video, group: true }, 45);
+    }));
+  });
+  socket.on('group-call:join', async ({ callId }) => {
+    const groupCall = groupCalls.get(callId); const chat = groupCall && socketChat(socket, groupCall.chatId);
+    if (!groupCall || !chat?.isGroup) return socket.emit('group-call:error', { callId, message: 'This group call has ended.' });
+    if (groupCall.participants.has(uid)) return socket.emit('group-call:error', { callId, message: 'Your account is already connected to this group call on another device.' });
+    if (groupCall.participants.size >= 6) return socket.emit('group-call:error', { callId, message: 'This group call has reached its six-person limit.' });
+    const participants = groupCallView(groupCall).participants;
+    groupCall.participants.set(uid, socket.id); socket.join(groupCallRoom(callId));
+    socket.emit('group-call:participants', { callId, participants });
+    io.to(groupCallRoom(callId)).emit('group-call:participant-joined', { callId, participant: publicUser(db.users.find((user) => user.id === uid)) });
+    socket.to(`user:${uid}`).emit('group-call:answered-elsewhere', { callId });
+    await pushToUser(uid, { callId, dismissed: true });
+  });
+  socket.on('group-call:decline', async ({ callId }) => { const groupCall = groupCalls.get(callId); const chat = groupCall && socketChat(socket, groupCall.chatId); if (!chat?.isGroup || groupCall.participants.has(uid)) return; socket.to(`user:${uid}`).emit('group-call:answered-elsewhere', { callId }); io.to(groupCallRoom(callId)).emit('group-call:declined', { callId, user: publicUser(db.users.find((user) => user.id === uid)) }); await pushToUser(uid, { callId, dismissed: true }); });
+  socket.on('group-call:offer', ({ callId, targetId, offer }) => { const groupCall = groupCalls.get(callId); const chat = groupCall && socketChat(socket, groupCall.chatId); const targetSocketId = groupCall?.participants.get(targetId); if (chat?.isGroup && groupCall.participants.get(uid) === socket.id && targetSocketId && targetId !== uid) io.to(targetSocketId).emit('group-call:offer', { callId, from: uid, offer }); });
+  socket.on('group-call:answer', ({ callId, targetId, answer }) => { const groupCall = groupCalls.get(callId); const chat = groupCall && socketChat(socket, groupCall.chatId); const targetSocketId = groupCall?.participants.get(targetId); if (chat?.isGroup && groupCall.participants.get(uid) === socket.id && targetSocketId) io.to(targetSocketId).emit('group-call:answer', { callId, from: uid, answer }); });
+  socket.on('group-call:ice', ({ callId, targetId, candidate }) => { const groupCall = groupCalls.get(callId); const chat = groupCall && socketChat(socket, groupCall.chatId); const targetSocketId = groupCall?.participants.get(targetId); if (chat?.isGroup && groupCall.participants.get(uid) === socket.id && targetSocketId) io.to(targetSocketId).emit('group-call:ice', { callId, from: uid, candidate }); });
+  socket.on('group-call:leave', ({ callId }) => { const groupCall = groupCalls.get(callId); if (!groupCall || groupCall.participants.get(uid) !== socket.id) return; socket.leave(groupCallRoom(callId)); removeGroupCallParticipant(groupCall, uid); });
+  socket.on('disconnect', async () => { for (const groupCall of groupCalls.values()) if (groupCall.participants.get(uid) === socket.id) removeGroupCallParticipant(groupCall, uid); const n = (onlineUsers.get(uid) || 1) - 1; if (n) onlineUsers.set(uid, n); else { onlineUsers.delete(uid); const u = db.users.find((x) => x.id === uid); if (u) { u.lastSeen = new Date().toISOString(); await save(); } emitPresence(uid); } });
 });
 
 async function start() {

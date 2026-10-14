@@ -51,6 +51,33 @@ try {
   assert(group.isGroup && group.title === 'Smoke group', 'group chat creation failed');
   assert((await fetch(`${origin}/data/whispr.json`)).status === 404, 'private application state is publicly exposed');
 
+  const groupIncoming = waitFor(bobSocket, 'group-call:incoming');
+  const groupCallId = 'smoke-group-call-123';
+  aliceSocket.emit('group-call:start', { chatId: group.id, callId: groupCallId, video: true });
+  const groupInvite = await groupIncoming;
+  assert(groupInvite.type === 'group' && groupInvite.groupName === 'Smoke group' && groupInvite.video, 'group video call did not ring group members');
+  const groupPending = await request(`/api/calls/pending/${groupCallId}`, bob.token);
+  assert(groupPending.type === 'group' && groupPending.chatId === group.id, 'group call could not resume from a push notification');
+  const aliceSawJoin = waitFor(aliceSocket, 'group-call:participant-joined');
+  const bobParticipants = waitFor(bobSocket, 'group-call:participants');
+  bobSocket.emit('group-call:join', { callId: groupCallId });
+  assert((await bobParticipants).participants.some((person) => person.id === alice.user.id), 'joining a group call did not return active members');
+  assert((await aliceSawJoin).participant.id === bob.user.id, 'joining a group call did not notify current members');
+  const groupOffer = waitFor(bobSocket, 'group-call:offer');
+  aliceSocket.emit('group-call:offer', { callId: groupCallId, targetId: bob.user.id, offer: { type: 'offer', sdp: 'group-smoke' } });
+  assert((await groupOffer).offer.sdp === 'group-smoke', 'group WebRTC offer was not relayed to its intended participant');
+  const groupAnswer = waitFor(aliceSocket, 'group-call:answer');
+  bobSocket.emit('group-call:answer', { callId: groupCallId, targetId: alice.user.id, answer: { type: 'answer', sdp: 'group-smoke' } });
+  assert((await groupAnswer).answer.sdp === 'group-smoke', 'group WebRTC answer was not relayed to the caller');
+  const groupIce = waitFor(bobSocket, 'group-call:ice');
+  aliceSocket.emit('group-call:ice', { callId: groupCallId, targetId: bob.user.id, candidate: { candidate: 'group-smoke-ice' } });
+  assert((await groupIce).candidate.candidate === 'group-smoke-ice', 'group ICE candidate was not relayed to its intended participant');
+  const groupLeft = waitFor(aliceSocket, 'group-call:participant-left');
+  bobSocket.emit('group-call:leave', { callId: groupCallId });
+  assert((await groupLeft).userId === bob.user.id, 'leaving a group call did not notify remaining members');
+  aliceSocket.emit('group-call:leave', { callId: groupCallId });
+  assert((await fetch(`${origin}/api/calls/pending/${groupCallId}`, { headers: { Authorization: `Bearer ${bob.token}` } })).status === 404, 'ended group call remained available to notification recipients');
+
   const incomingCall = waitFor(bobSocket, 'call:incoming');
   aliceSocket.emit('call:offer', { chatId: chat.id, callId: 'smoke-call-123', targetId: bob.user.id, video: true, offer: { type: 'offer', sdp: 'smoke' } });
   const incoming = await incomingCall;
@@ -85,7 +112,7 @@ try {
   const pushSubscription = { endpoint: 'https://fcm.googleapis.com/subscription', keys: { p256dh: 'test-key', auth: 'test-auth' } };
   await request('/api/push/subscriptions', bob.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pushSubscription) });
   await request('/api/push/subscriptions', bob.token, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: pushSubscription.endpoint }) });
-  console.log('PASS: auth, groups, realtime messages, signed media, resumable call signaling, multi-device call acceptance, and push subscription APIs');
+  console.log('PASS: auth, group chats and multi-person call signaling, realtime messages, signed media, resumable calls, multi-device acceptance, and push subscriptions');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
