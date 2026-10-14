@@ -1,6 +1,8 @@
 const token = localStorage.getItem('whispr_token');
 if (!token) location.replace('login.html');
 const $ = (selector) => document.querySelector(selector);
+function syncAppViewport() { const viewport = window.visualViewport; document.documentElement.style.setProperty('--app-height', `${Math.round(viewport?.height || window.innerHeight)}px`); document.documentElement.style.setProperty('--app-top', `${Math.round(viewport?.offsetTop || 0)}px`); }
+syncAppViewport(); window.visualViewport?.addEventListener('resize', syncAppViewport); window.addEventListener('resize', syncAppViewport);
 const esc = (value = '') => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const initials = (name = '?') => name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 const clock = (value) => new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(value));
@@ -12,7 +14,7 @@ const api = async (url, options = {}) => {
   return result;
 };
 
-let me, chats = [], activeChat = null, selectedUsers = [], call = null, voiceRecorder = null, voiceStream = null, voiceChunks = [];
+let me, chats = [], activeChat = null, selectedUsers = [], call = null, incomingCall = null, voiceRecorder = null, voiceStream = null, voiceChunks = [], ringTimer = null, ringAudioContext = null, callNotification = null, pushSubscribed = false, serviceWorkerRegistration = null;
 const earlyIce = new Map();
 const socket = io({ auth: { token }, reconnection: true, reconnectionAttempts: Infinity });
 socket.on('connect_error', (error) => { if (/unauthorized/i.test(error.message)) { localStorage.removeItem('whispr_token'); location.replace('login.html'); } else toast('Live connection lost. Retrying…', 'error'); });
@@ -126,7 +128,35 @@ let typingTimer; $('#message-input').addEventListener('input', () => { if (!acti
 
 $('#chat-search').addEventListener('input', renderChats);
 document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => { window.chatFilter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach((item) => item.classList.toggle('active', item === button)); renderChats(); }));
-$('#logout').onclick = () => { localStorage.removeItem('whispr_token'); location.replace('login.html'); };
+$('#logout').onclick = async () => { try { const subscription = await serviceWorkerRegistration?.pushManager.getSubscription(); if (subscription) { await api('/api/push/subscriptions', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: subscription.endpoint }) }).catch(() => {}); await subscription.unsubscribe(); } } finally { localStorage.removeItem('whispr_token'); location.replace('login.html'); } };
+function updateNotificationButton() {
+  const button = $('#notifications-toggle');
+  if (!('Notification' in window)) { button.disabled = true; button.title = 'This browser does not support system notifications'; return; }
+  const enabled = Notification.permission === 'granted' && pushSubscribed;
+  button.classList.toggle('notification-enabled', enabled);
+  button.title = enabled ? 'Background call notifications enabled' : Notification.permission === 'granted' ? 'Enable background call notifications' : 'Enable call notifications';
+  button.setAttribute('aria-label', button.title);
+}
+$('#notifications-toggle').onclick = async () => {
+  if (!('Notification' in window)) return toast('System notifications are not supported in this browser.', 'error');
+  if (!window.isSecureContext) return toast('Notifications require HTTPS or localhost.', 'error');
+  if (Notification.permission === 'denied') return toast('Notifications are blocked in browser settings. Allow them for this site, then try again.', 'error');
+  try {
+    const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+    updateNotificationButton(); if (permission !== 'granted') return toast('Notification permission was not granted.', 'error');
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return toast('Notifications are enabled while Whispr is open. Background push is not supported by this browser.', 'error');
+    serviceWorkerRegistration ||= await navigator.serviceWorker.register('/service-worker.js');
+    serviceWorkerRegistration = await navigator.serviceWorker.ready;
+    const config = await api('/api/push/public-key');
+    if (!config.enabled || !config.publicKey) return toast('Foreground notifications are enabled. Background call notifications need VAPID keys configured on the server.', 'error');
+    let subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+    if (!subscription) subscription = await serviceWorkerRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodeVapidKey(config.publicKey) });
+    await api('/api/push/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(subscription) });
+    pushSubscribed = true; updateNotificationButton(); toast('Background call notifications are enabled on this device.');
+  } catch (error) { toast(error.message || 'Could not enable notifications in this browser.', 'error'); }
+};
+function decodeVapidKey(value) { const normalized = value.replace(/-/g, '+').replace(/_/g, '/'); const binary = atob(normalized + '='.repeat((4 - normalized.length % 4) % 4)); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }
+updateNotificationButton();
 function updateGroupForm() { const isGroup = selectedUsers.length > 1; $('#group-name').hidden = $('#group-name-label').hidden = !isGroup; $('#create-chat').disabled = !selectedUsers.length; $('#create-chat').textContent = isGroup ? `Create group (${selectedUsers.length})` : 'Start chat'; }
 $('#new-chat').onclick = () => { selectedUsers = []; $('#group-name').value = ''; $('#user-picker').value = ''; $('#user-results').innerHTML = ''; updateGroupForm(); $('#new-chat-dialog').showModal(); $('#user-picker').focus(); };
 $('#user-picker').addEventListener('input', async () => { const users = await api(`/api/users?q=${encodeURIComponent($('#user-picker').value)}`); $('#user-results').innerHTML = users.map((user) => `<button type="button" class="user-option ${selectedUsers.some((item) => item.id === user.id) ? 'selected' : ''}" data-user-id="${esc(user.id)}" aria-pressed="${selectedUsers.some((item) => item.id === user.id)}">${esc(user.name)} <small>${esc(user.email)}</small></button>`).join('') || '<p>No registered users found.</p>'; document.querySelectorAll('[data-user-id]').forEach((button) => button.onclick = () => { const user = users.find((item) => item.id === button.dataset.userId); selectedUsers = selectedUsers.some((item) => item.id === user.id) ? selectedUsers.filter((item) => item.id !== user.id) : [...selectedUsers, user]; button.classList.toggle('selected', selectedUsers.some((item) => item.id === user.id)); button.setAttribute('aria-pressed', String(selectedUsers.some((item) => item.id === user.id))); updateGroupForm(); }); });
@@ -167,19 +197,100 @@ $('#report').onclick = async () => { if (!activeChat) return; const reason = pro
 $('#profile-button').onclick = () => { $('#profile-name').value = me.name; $('#profile-bio').value = me.bio || ''; $('#avatar-input').value = ''; $('#profile-error').textContent = ''; $('#profile-dialog').showModal(); };
 $('#profile-form').addEventListener('submit', async (event) => { event.preventDefault(); try { me = await api('/api/me', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: $('#profile-name').value, bio: $('#profile-bio').value }) }); const image = $('#avatar-input').files[0]; if (image) { const data = new FormData(); data.append('avatar', image); me = await api('/api/me/avatar', { method: 'POST', body: data }); } $('#profile-dialog').close(); $('#me-name').textContent = me.name; $('#me-bio').textContent = me.bio || 'Available'; $('#me-initial').innerHTML = avatarMarkup(me); await loadChats(); } catch (error) { $('#profile-error').textContent = error.message; } });
 
-function stopCall(notify = true) { if (!call) return; clearTimeout(call.ringTimer); if (notify && call.peerId) socket.emit('call:end', { chatId: call.chatId, targetId: call.peerId }); call.stream?.getTracks().forEach((track) => track.stop()); call.pc?.close(); call = null; $('#local-video').srcObject = null; $('#remote-video').srcObject = null; if ($('#call-dialog').open) $('#call-dialog').close(); }
-async function prepareCall(video) { if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Calls require HTTPS and a browser with camera/microphone support.'); const config = await api('/api/rtc-config'); const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video }); const pc = new RTCPeerConnection(config); call = { chatId: activeChat.id, peerId: null, stream, pc, pendingIce: [] }; $('#call-dialog').classList.toggle('audio-only', !video); $('#toggle-camera').hidden = !video; $('#toggle-camera').textContent = 'Camera off'; $('#toggle-mic').textContent = 'Mute'; stream.getTracks().forEach((track) => pc.addTrack(track, stream)); pc.ontrack = (event) => { $('#remote-video').srcObject = event.streams[0]; }; pc.onicecandidate = (event) => { if (event.candidate && call?.peerId) socket.emit('call:ice', { chatId: call.chatId, targetId: call.peerId, candidate: event.candidate }); }; pc.onconnectionstatechange = () => { if (pc.connectionState === 'connected') $('#call-title').textContent = 'Connected'; if (pc.connectionState === 'failed') toast('Call could not connect. Add a TURN service in deployment settings for this network.', 'error'); }; $('#local-video').srcObject = stream; $('#call-dialog').showModal(); }
-async function startCall(video) { if (!activeChat || activeChat.isGroup) return toast('Calls are available in direct chats.', 'error'); if (!activeChat.online) return toast('This contact is offline right now.', 'error'); try { await prepareCall(video); const peer = activeChat.participants.find((person) => person.id !== me.id); call.peerId = peer.id; $('#call-title').textContent = `Calling ${peer.name}…`; call.ringTimer = setTimeout(() => { stopCall(); toast('No answer.'); }, 45000); const offer = await call.pc.createOffer(); await call.pc.setLocalDescription(offer); socket.emit('call:offer', { chatId: call.chatId, targetId: call.peerId, offer, video }); } catch (error) { stopCall(false); toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone access in the browser, then try again.' : error.message, 'error'); } }
-socket.on('call:incoming', async ({ chatId, offer, video, from }) => { const chat = chats.find((item) => item.id === chatId); if (!chat || call) return socket.emit('call:end', { chatId, targetId: from.id }); const answerCall = confirm(`${from.name} is calling. Answer?`); if (!answerCall) return socket.emit('call:end', { chatId, targetId: from.id }); try { activeChat = chat; await prepareCall(video); call.peerId = from.id; call.pendingIce = earlyIce.get(`${chatId}:${from.id}`) || []; earlyIce.delete(`${chatId}:${from.id}`); await call.pc.setRemoteDescription(offer); for (const candidate of call.pendingIce) await call.pc.addIceCandidate(candidate); call.pendingIce = []; const answer = await call.pc.createAnswer(); await call.pc.setLocalDescription(answer); socket.emit('call:answer', { chatId, targetId: from.id, answer }); $('#call-title').textContent = `In call with ${from.name}`; } catch (error) { stopCall(false); toast(error.message, 'error'); } });
-socket.on('call:answer', async ({ chatId, answer, from }) => { if (!call || call.chatId !== chatId || call.peerId !== from) return; try { clearTimeout(call.ringTimer); await call.pc.setRemoteDescription(answer); for (const candidate of call.pendingIce) await call.pc.addIceCandidate(candidate); call.pendingIce = []; $('#call-title').textContent = 'Connecting…'; } catch (error) { toast(`Could not establish call: ${error.message}`, 'error'); stopCall(false); } });
+function stopRinging() { clearInterval(ringTimer); ringTimer = null; if (callNotification) { callNotification.close(); callNotification = null; } }
+function playRingPattern() {
+  if (!ringAudioContext) { const AudioContextClass = window.AudioContext || window.webkitAudioContext; if (AudioContextClass) ringAudioContext = new AudioContextClass(); }
+  if (!ringAudioContext) return;
+  ringAudioContext.resume().then(() => {
+    if (!incomingCall) return;
+    const now = ringAudioContext.currentTime;
+    [0, 0.24].forEach((offset) => { const oscillator = ringAudioContext.createOscillator(); const gain = ringAudioContext.createGain(); oscillator.type = 'sine'; oscillator.frequency.value = 760; gain.gain.setValueAtTime(0.0001, now + offset); gain.gain.exponentialRampToValueAtTime(0.12, now + offset + 0.025); gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.2); oscillator.connect(gain).connect(ringAudioContext.destination); oscillator.start(now + offset); oscillator.stop(now + offset + 0.22); });
+  }).catch(() => {});
+}
+function startRinging() {
+  stopRinging(); playRingPattern(); ringTimer = setInterval(playRingPattern, 1800);
+  if (!pushSubscribed && 'Notification' in window && Notification.permission === 'granted') {
+    const { from, video, chatId } = incomingCall;
+    callNotification = new Notification(video ? 'Incoming video call' : 'Incoming voice call', { body: `${from.name} is calling you`, tag: `whispr-call-${incomingCall.callId}`, renotify: true, requireInteraction: true });
+    callNotification.onclick = () => { window.focus(); if (incomingCall && !$('#incoming-call-dialog').open) $('#incoming-call-dialog').showModal(); callNotification?.close(); };
+    callNotification.onclose = () => { callNotification = null; };
+  }
+}
+function dismissIncomingCall(notifyCaller = true) {
+  if (!incomingCall) return;
+  const { callId, chatId, from, timeout } = incomingCall; clearTimeout(timeout); incomingCall = null; stopRinging();
+  if ($('#incoming-call-dialog').open) $('#incoming-call-dialog').close();
+  if (callId && 'serviceWorker' in navigator) navigator.serviceWorker.getRegistration('/').then((registration) => registration?.getNotifications({ tag: `whispr-call-${callId}` }).then((notifications) => notifications.forEach((notification) => notification.close()))).catch(() => {});
+  if (notifyCaller) socket.emit('call:end', { chatId, callId, targetId: from.id });
+}
+function stopCall(notify = true) { if (!call) return; clearTimeout(call.ringTimer); if (notify && call.peerId) socket.emit('call:end', { chatId: call.chatId, callId: call.callId, targetId: call.peerId }); call.stream?.getTracks().forEach((track) => track.stop()); call.pc?.close(); call = null; $('#local-video').srcObject = null; $('#remote-video').srcObject = null; $('#call-dialog').classList.remove('has-remote-video'); if (document.fullscreenElement === $('#call-dialog')) document.exitFullscreen().catch(() => {}); if ($('#call-dialog').open) $('#call-dialog').close(); }
+function setCallControl(selector, icon, label, pressed = false) { const button = $(selector); button.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i><span>${label}</span>`; button.setAttribute('aria-label', label); button.setAttribute('title', label); button.setAttribute('aria-pressed', String(pressed)); }
+async function prepareCall(video) { if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) throw new Error('Calls require HTTPS and a browser with camera/microphone support.'); const config = await api('/api/rtc-config'); const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video }); const pc = new RTCPeerConnection(config); call = { chatId: activeChat.id, peerId: null, callId: null, stream, pc, pendingIce: [] }; $('#call-dialog').classList.toggle('audio-only', !video); $('#call-dialog').classList.remove('has-remote-video'); $('#remote-video').srcObject = null; $('#toggle-camera').hidden = !video; setCallControl('#toggle-camera', 'fa-video', 'Camera off'); setCallControl('#toggle-mic', 'fa-microphone', 'Mute'); $('#toggle-fullscreen').hidden = false; stream.getTracks().forEach((track) => pc.addTrack(track, stream)); pc.ontrack = (event) => { if (event.streams[0]) { $('#remote-video').srcObject = event.streams[0]; $('#call-dialog').classList.add('has-remote-video'); } }; pc.onicecandidate = (event) => { if (event.candidate && call?.peerId) socket.emit('call:ice', { chatId: call.chatId, callId: call.callId, targetId: call.peerId, candidate: event.candidate }); }; pc.onconnectionstatechange = () => { if (pc.connectionState === 'connected') $('#call-title').textContent = 'Connected'; if (pc.connectionState === 'failed') toast('Call could not connect. Add a TURN service in deployment settings for this network.', 'error'); }; $('#local-video').srcObject = stream; $('#call-dialog').showModal(); }
+async function startCall(video) { if (!activeChat || activeChat.isGroup) return toast('Calls are available in direct chats.', 'error'); try { const peer = activeChat.participants.find((person) => person.id !== me.id); await prepareCall(video); call.peerId = peer.id; call.callId = crypto.randomUUID(); $('#call-avatar').innerHTML = avatarMarkup(peer); $('#call-title').textContent = `Calling ${peer.name}…`; call.ringTimer = setTimeout(() => { stopCall(); toast('No answer.'); }, 45000); const offer = await call.pc.createOffer(); await call.pc.setLocalDescription(offer); socket.emit('call:offer', { chatId: call.chatId, callId: call.callId, targetId: call.peerId, offer, video }); } catch (error) { stopCall(false); toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone access in the browser, then try again.' : error.message, 'error'); } }
+function showIncomingCall({ callId, chatId, offer, video, from }) {
+  if (incomingCall?.callId === callId) return;
+  if (!chats.some((item) => item.id === chatId) || call || incomingCall) return socket.emit('call:end', { chatId, callId, targetId: from.id });
+  incomingCall = { callId, chatId, offer, video, from };
+  $('#incoming-call-kind').textContent = video ? 'INCOMING VIDEO CALL' : 'INCOMING VOICE CALL';
+  $('#incoming-call-title').textContent = from.name;
+  $('#incoming-call-avatar').innerHTML = avatarMarkup(from);
+  $('#incoming-call-status').textContent = `${video ? 'Video' : 'Voice'} call · answering will ask for ${video ? 'camera and microphone' : 'microphone'} access`;
+  $('#incoming-call-dialog').showModal(); startRinging();
+  incomingCall.timeout = setTimeout(() => { dismissIncomingCall(true); toast('Missed call from ' + from.name); }, 45000);
+}
+socket.on('call:incoming', showIncomingCall);
+async function acceptIncomingCall() {
+  if (!incomingCall) return;
+  const incoming = incomingCall; clearTimeout(incoming.timeout); incomingCall = null; stopRinging();
+  if ($('#incoming-call-dialog').open) $('#incoming-call-dialog').close();
+  try {
+    activeChat = chats.find((item) => item.id === incoming.chatId) || null;
+    if (!activeChat) throw new Error('This conversation is no longer available.');
+    $('#call-avatar').innerHTML = avatarMarkup(incoming.from);
+    $('.chat-shell').classList.add('chat-open');
+    renderHeader(); renderChats();
+    await prepareCall(incoming.video); call.peerId = incoming.from.id; call.callId = incoming.callId;
+    call.pendingIce = earlyIce.get(`${incoming.chatId}:${incoming.from.id}`) || []; earlyIce.delete(`${incoming.chatId}:${incoming.from.id}`);
+    await call.pc.setRemoteDescription(incoming.offer);
+    for (const candidate of call.pendingIce) await call.pc.addIceCandidate(candidate);
+    call.pendingIce = [];
+    const answer = await call.pc.createAnswer(); await call.pc.setLocalDescription(answer);
+    socket.emit('call:answer', { chatId: incoming.chatId, callId: incoming.callId, targetId: incoming.from.id, answer });
+    $('#call-title').textContent = `In call with ${incoming.from.name}`;
+  } catch (error) { socket.emit('call:end', { chatId: incoming.chatId, callId: incoming.callId, targetId: incoming.from.id }); stopCall(false); toast(error.name === 'NotAllowedError' ? 'Allow camera and microphone access, then answer again.' : error.message, 'error'); }
+}
+$('#accept-call').onclick = acceptIncomingCall;
+$('#decline-call').onclick = () => dismissIncomingCall(true);
+$('#incoming-call-dialog').addEventListener('cancel', (event) => { event.preventDefault(); dismissIncomingCall(true); });
+socket.on('call:answer', async ({ chatId, callId, answer, from }) => { if (!call || call.chatId !== chatId || call.peerId !== from || (call.callId && callId && call.callId !== callId)) return; try { clearTimeout(call.ringTimer); await call.pc.setRemoteDescription(answer); for (const candidate of call.pendingIce) await call.pc.addIceCandidate(candidate); call.pendingIce = []; $('#call-title').textContent = 'Connecting…'; } catch (error) { toast(`Could not establish call: ${error.message}`, 'error'); stopCall(false); } });
 socket.on('call:ice', async ({ chatId, candidate, from }) => { if (!call || call.chatId !== chatId || call.peerId !== from) { const key = `${chatId}:${from}`; earlyIce.set(key, [...(earlyIce.get(key) || []), candidate]); setTimeout(() => earlyIce.delete(key), 60000); return; } if (!call.pc.remoteDescription) call.pendingIce.push(candidate); else try { await call.pc.addIceCandidate(candidate); } catch (error) { console.warn('ICE candidate was rejected', error); } });
-socket.on('call:end', ({ chatId, from }) => { if (call?.chatId === chatId && call.peerId === from) { stopCall(false); toast('Call ended.'); } });
+socket.on('call:end', ({ chatId, callId, from }) => { if (incomingCall?.chatId === chatId && incomingCall.from.id === from && (!callId || incomingCall.callId === callId)) { dismissIncomingCall(false); toast('Caller ended the call.'); } if (call?.chatId === chatId && call.peerId === from && (!callId || call.callId === callId)) { stopCall(false); toast('Call ended.'); } });
+socket.on('call:answered-elsewhere', ({ chatId, callId, from }) => { if (incomingCall?.chatId === chatId && incomingCall.from.id === from && (!callId || incomingCall.callId === callId)) dismissIncomingCall(false); });
 $('#end-call').onclick = () => stopCall();
-$('#toggle-mic').onclick = (event) => { const track = call?.stream.getAudioTracks()[0]; if (!track) return; track.enabled = !track.enabled; event.currentTarget.textContent = track.enabled ? 'Mute' : 'Unmute'; };
-$('#toggle-camera').onclick = (event) => { const track = call?.stream.getVideoTracks()[0]; if (!track) return; track.enabled = !track.enabled; event.currentTarget.textContent = track.enabled ? 'Camera off' : 'Camera on'; };
+$('#toggle-mic').onclick = () => { const track = call?.stream.getAudioTracks()[0]; if (!track) return; track.enabled = !track.enabled; setCallControl('#toggle-mic', track.enabled ? 'fa-microphone' : 'fa-microphone-slash', track.enabled ? 'Mute' : 'Unmute', !track.enabled); };
+$('#toggle-camera').onclick = () => { const track = call?.stream.getVideoTracks()[0]; if (!track) return; track.enabled = !track.enabled; setCallControl('#toggle-camera', track.enabled ? 'fa-video' : 'fa-video-slash', track.enabled ? 'Camera off' : 'Camera on', !track.enabled); };
+$('#toggle-fullscreen').onclick = async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await $('#call-dialog').requestFullscreen(); } catch { toast('Fullscreen is not available in this browser.', 'error'); } };
+document.addEventListener('fullscreenchange', () => { const enabled = !!document.fullscreenElement; setCallControl('#toggle-fullscreen', enabled ? 'fa-compress' : 'fa-expand', enabled ? 'Exit fullscreen' : 'Fullscreen', enabled); });
 $('#call-dialog').addEventListener('cancel', () => stopCall());
 let swipeStart = null;
 document.addEventListener('touchstart', (event) => { const touch = event.changedTouches[0]; swipeStart = { x: touch.clientX, y: touch.clientY }; }, { passive: true });
 document.addEventListener('touchend', (event) => { if (!swipeStart || !$('.chat-shell').classList.contains('chat-open')) return; const touch = event.changedTouches[0]; const dx = touch.clientX - swipeStart.x; const dy = Math.abs(touch.clientY - swipeStart.y); if (swipeStart.x < 36 && dx > 90 && dy < 70) $('.chat-shell').classList.remove('chat-open'); swipeStart = null; }, { passive: true });
 
-(async () => { try { me = await api('/api/me'); $('#me-name').textContent = me.name; $('#me-bio').textContent = me.bio || 'Available'; $('#me-initial').innerHTML = avatarMarkup(me); await loadChats(); } catch (error) { toast(error.message, 'error'); } })();
+(async () => {
+  try {
+    me = await api('/api/me'); $('#me-name').textContent = me.name; $('#me-bio').textContent = me.bio || 'Available'; $('#me-initial').innerHTML = avatarMarkup(me); await loadChats();
+    if ('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && Notification.permission === 'granted') {
+      serviceWorkerRegistration = await navigator.serviceWorker.getRegistration('/');
+      const subscription = await serviceWorkerRegistration?.pushManager.getSubscription();
+      pushSubscribed = !!subscription;
+      if (subscription) await api('/api/push/subscriptions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(subscription) });
+      updateNotificationButton();
+    }
+    const notificationCallId = new URLSearchParams(location.search).get('callId');
+    if (notificationCallId) {
+      history.replaceState(null, '', location.pathname);
+      const pending = await api(`/api/calls/pending/${encodeURIComponent(notificationCallId)}`);
+      showIncomingCall(pending);
+    }
+  } catch (error) { toast(error.message, 'error'); }
+})();

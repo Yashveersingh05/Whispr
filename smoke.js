@@ -3,13 +3,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { io as connect } from 'socket.io-client';
+import webpush from 'web-push';
 
 const dataDirectory = await mkdtemp(path.join(tmpdir(), 'whispr-smoke-'));
 const port = 32000 + Math.floor(Math.random() * 20000);
 const origin = `http://127.0.0.1:${port}`;
-const child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), JWT_SECRET: 'smoke-test-only-secret', DB_FILE: path.join(dataDirectory, 'state.json'), UPLOAD_DIR: path.join(dataDirectory, 'uploads') }, stdio: 'ignore' });
+const vapidKeys = webpush.generateVAPIDKeys();
+const child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), JWT_SECRET: 'smoke-test-only-secret', VAPID_PUBLIC_KEY: vapidKeys.publicKey, VAPID_PRIVATE_KEY: vapidKeys.privateKey, VAPID_SUBJECT: 'mailto:smoke@example.test', DB_FILE: path.join(dataDirectory, 'state.json'), UPLOAD_DIR: path.join(dataDirectory, 'uploads') }, stdio: 'ignore' });
 let aliceSocket;
 let bobSocket;
+let bobSecondSocket;
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const waitFor = (socket, event) => new Promise((resolve, reject) => { const timeout = setTimeout(() => reject(new Error(`Timed out waiting for ${event}`)), 5000); socket.once(event, (value) => { clearTimeout(timeout); resolve(value); }); });
 const waitForServer = async () => { for (let attempt = 0; attempt < 60; attempt += 1) { try { if ((await fetch(origin)).ok) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 100)); } throw new Error('Server did not start'); };
@@ -22,7 +25,8 @@ try {
   const bob = await request('/api/auth/register', null, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Smoke Bob', email: `bob-${tag}@example.test`, password: 'smoke-pass-123' }) });
   aliceSocket = connect(origin, { auth: { token: alice.token }, reconnection: false });
   bobSocket = connect(origin, { auth: { token: bob.token }, reconnection: false });
-  await Promise.all([waitFor(aliceSocket, 'connect'), waitFor(bobSocket, 'connect')]);
+  bobSecondSocket = connect(origin, { auth: { token: bob.token }, reconnection: false });
+  await Promise.all([waitFor(aliceSocket, 'connect'), waitFor(bobSocket, 'connect'), waitFor(bobSecondSocket, 'connect')]);
   const chat = await request('/api/chats', alice.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberIds: [bob.user.id] }) });
 
   const messageReceived = waitFor(bobSocket, 'message:new');
@@ -48,25 +52,47 @@ try {
   assert((await fetch(`${origin}/data/whispr.json`)).status === 404, 'private application state is publicly exposed');
 
   const incomingCall = waitFor(bobSocket, 'call:incoming');
-  aliceSocket.emit('call:offer', { chatId: chat.id, targetId: bob.user.id, video: true, offer: { type: 'offer', sdp: 'smoke' } });
-  assert((await incomingCall).from.id === alice.user.id, 'call offer did not reach the other participant');
+  aliceSocket.emit('call:offer', { chatId: chat.id, callId: 'smoke-call-123', targetId: bob.user.id, video: true, offer: { type: 'offer', sdp: 'smoke' } });
+  const incoming = await incomingCall;
+  assert(incoming.from.id === alice.user.id && incoming.callId === 'smoke-call-123', 'call offer did not reach the other participant');
+  assert((await request(`/api/calls/pending/${incoming.callId}`, bob.token)).offer.sdp === 'smoke', 'pending call could not resume from a push notification');
+  assert((await fetch(`${origin}/api/calls/pending/${incoming.callId}`, { headers: { Authorization: `Bearer ${alice.token}` } })).status === 404, 'pending call offer was exposed to a non-recipient');
   const answered = waitFor(aliceSocket, 'call:answer');
-  bobSocket.emit('call:answer', { chatId: chat.id, targetId: alice.user.id, answer: { type: 'answer', sdp: 'smoke' } });
+  const dismissedOnSecondDevice = waitFor(bobSecondSocket, 'call:answered-elsewhere');
+  const bufferedIce = waitFor(bobSocket, 'call:ice');
+  aliceSocket.emit('call:ice', { chatId: chat.id, callId: incoming.callId, targetId: bob.user.id, candidate: { candidate: 'caller-ice' } });
+  bobSocket.emit('call:answer', { chatId: chat.id, callId: incoming.callId, targetId: alice.user.id, answer: { type: 'answer', sdp: 'smoke' } });
   assert((await answered).from === bob.user.id, 'call answer did not return to caller');
+  assert((await bufferedIce).candidate.candidate === 'caller-ice', 'ICE candidates gathered before a background call was answered were lost');
+  assert((await dismissedOnSecondDevice).chatId === chat.id, 'answering on one device did not dismiss ringing on the other device');
   const ice = waitFor(aliceSocket, 'call:ice');
-  bobSocket.emit('call:ice', { chatId: chat.id, targetId: alice.user.id, candidate: { candidate: 'smoke' } });
+  bobSocket.emit('call:ice', { chatId: chat.id, callId: incoming.callId, targetId: alice.user.id, candidate: { candidate: 'smoke' } });
   assert((await ice).candidate.candidate === 'smoke', 'ICE candidate did not reach caller');
+  const secondIncomingCall = waitFor(bobSecondSocket, 'call:incoming');
+  const callerEnded = waitFor(aliceSocket, 'call:end');
+  aliceSocket.emit('call:offer', { chatId: chat.id, callId: 'smoke-call-decline', targetId: bob.user.id, video: false, offer: { type: 'offer', sdp: 'decline-smoke' } });
+  await waitFor(bobSocket, 'call:incoming');
+  await secondIncomingCall;
+  const otherDeviceDismissed = waitFor(bobSecondSocket, 'call:answered-elsewhere');
+  bobSocket.emit('call:end', { chatId: chat.id, callId: 'smoke-call-decline', targetId: alice.user.id });
+  assert((await callerEnded).from === bob.user.id, 'declining the call did not stop ringing for the caller');
+  assert((await otherDeviceDismissed).chatId === chat.id, 'declining on one device did not stop ringing on another device');
   await request('/api/me', alice.token, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Smoke Alice Updated', bio: 'Available for testing' }) });
   const profile = await request('/api/me', alice.token);
   assert(profile.bio === 'Available for testing', 'profile changes were not persisted');
   assert(Array.isArray((await request('/api/rtc-config', alice.token)).iceServers), 'RTC configuration is not available');
-  console.log('PASS: auth, profile persistence, direct and group chat creation, realtime messages, idempotent retries, signed media, call signaling, and RTC configuration');
+  assert((await request('/api/push/public-key', bob.token)).enabled, 'background push configuration was not exposed to the app');
+  const pushSubscription = { endpoint: 'https://fcm.googleapis.com/subscription', keys: { p256dh: 'test-key', auth: 'test-auth' } };
+  await request('/api/push/subscriptions', bob.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pushSubscription) });
+  await request('/api/push/subscriptions', bob.token, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: pushSubscription.endpoint }) });
+  console.log('PASS: auth, groups, realtime messages, signed media, resumable call signaling, multi-device call acceptance, and push subscription APIs');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
 } finally {
   aliceSocket?.close();
   bobSocket?.close();
+  bobSecondSocket?.close();
   child.kill();
   await rm(dataDirectory, { recursive: true, force: true });
 }

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import { createHmac } from 'node:crypto';
 import pg from 'pg';
+import webpush from 'web-push';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
@@ -29,6 +30,11 @@ const pool = process.env.DATABASE_URL ? new pg.Pool({ connectionString: process.
 
 const blank = () => ({ users: [], chats: [], messages: [], files: [], reports: [], settings: { registrationOpen: true } });
 let db = fs.existsSync(dbPath) ? JSON.parse(fs.readFileSync(dbPath, 'utf8')) : blank();
+db.pushSubscriptions ||= [];
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || '';
+const vapidConfigured = !!(vapidPublicKey && process.env.VAPID_PRIVATE_KEY && process.env.VAPID_SUBJECT);
+if (vapidConfigured) webpush.setVapidDetails(process.env.VAPID_SUBJECT, vapidPublicKey, process.env.VAPID_PRIVATE_KEY);
+const pendingCalls = new Map();
 let saveQueue = Promise.resolve();
 const save = () => {
   const state = JSON.stringify(db);
@@ -42,6 +48,18 @@ const publicUser = (u) => u && ({ id: u.id, name: u.name, email: u.email, avatar
 const onlineUsers = new Map();
 const tokenFor = (u) => jwt.sign({ id: u.id }, secret, { expiresIn: '7d' });
 const mediaUrl = (file, userId) => `/media/${file.id}?token=${encodeURIComponent(jwt.sign({ scope: 'media', fileId: file.id, userId }, secret, { expiresIn: '30m' }))}`;
+async function pushToUser(userId, payload, ttl = 60) {
+  if (!vapidConfigured) return;
+  let removed = false;
+  await Promise.all(db.pushSubscriptions.filter((item) => item.userId === userId).map(async (item) => {
+    try { await webpush.sendNotification(item.subscription, JSON.stringify(payload), { TTL: ttl, urgency: 'high' }); }
+    catch (error) {
+      if (error.statusCode === 404 || error.statusCode === 410) { db.pushSubscriptions = db.pushSubscriptions.filter((saved) => saved.subscription.endpoint !== item.subscription.endpoint); removed = true; }
+      else console.warn('Call push notification failed:', error.message);
+    }
+  }));
+  if (removed) await save();
+}
 const getUser = (req) => db.users.find((u) => u.id === req.user.id);
 const members = (chat) => chat.memberIds.map((memberId) => db.users.find((u) => u.id === memberId)).filter(Boolean);
 const peer = (chat, userId) => members(chat).find((u) => u.id !== userId);
@@ -89,6 +107,20 @@ app.get('/api/rtc-config', authorize, (req, res) => {
   }
   res.set('Cache-Control', 'no-store').json({ iceServers });
 });
+app.get('/api/push/public-key', authorize, (req, res) => res.set('Cache-Control', 'no-store').json({ enabled: vapidConfigured, publicKey: vapidConfigured ? vapidPublicKey : null }));
+app.post('/api/push/subscriptions', authorize, async (req, res) => {
+  if (!vapidConfigured) return res.status(503).json({ error: 'Background notifications are not configured on this server yet.' });
+  const subscription = req.body;
+  if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) return res.status(400).json({ error: 'A valid push subscription is required.' });
+  let endpoint;
+  try { endpoint = new URL(subscription.endpoint); } catch { return res.status(400).json({ error: 'Invalid push endpoint.' }); }
+  const trustedPushHosts = ['fcm.googleapis.com', 'push.services.mozilla.com', 'web.push.apple.com', 'notify.windows.com'];
+  if (endpoint.protocol !== 'https:' || !trustedPushHosts.some((host) => endpoint.hostname === host || endpoint.hostname.endsWith(`.${host}`))) return res.status(400).json({ error: 'Unsupported push service endpoint.' });
+  db.pushSubscriptions = db.pushSubscriptions.filter((item) => item.userId !== req.user.id || item.subscription.endpoint !== subscription.endpoint);
+  db.pushSubscriptions.push({ userId: req.user.id, subscription }); await save(); res.status(201).json({ ok: true });
+});
+app.delete('/api/push/subscriptions', authorize, async (req, res) => { const endpoint = String(req.body?.endpoint || ''); db.pushSubscriptions = db.pushSubscriptions.filter((item) => item.userId !== req.user.id || item.subscription.endpoint !== endpoint); await save(); res.status(204).end(); });
+app.get('/api/calls/pending/:callId', authorize, (req, res) => { const pending = pendingCalls.get(req.params.callId); if (!pending || pending.toUserId !== req.user.id || pending.expiresAt < Date.now()) return res.sendStatus(404); res.set('Cache-Control', 'no-store').json(pending.payload); });
 app.patch('/api/me', authorize, async (req, res) => { const u = getUser(req); const name = String(req.body.name || '').trim(); if (!name) return res.status(400).json({ error: 'Name is required.' }); u.name = name; u.bio = String(req.body.bio || '').trim().slice(0, 160); await save(); res.json(publicUser(u)); });
 app.post('/api/me/avatar', authorize, upload.single('avatar'), async (req, res) => { if (!req.file || !['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'].includes(req.file.mimetype)) return res.status(400).json({ error: 'Choose a JPEG, PNG, GIF, WebP, or AVIF image.' }); const u = getUser(req); u.avatar = `/uploads/${req.file.filename}`; u.avatarMime = req.file.mimetype; await save(); res.json(publicUser(u)); });
 
@@ -141,10 +173,17 @@ io.on('connection', (socket) => {
   db.chats.filter((c) => c.memberIds.includes(uid)).forEach((c) => socket.join(`chat:${c.id}`));
   socket.on('chat:join', ({ chatId }) => { if (socketChat(socket, chatId)) socket.join(`chat:${chatId}`); });
   socket.on('typing', ({ chatId, active }) => { if (socketChat(socket, chatId)) socket.to(`chat:${chatId}`).emit('typing', { chatId, userId: uid, active: !!active }); });
-  socket.on('call:offer', ({ chatId, offer, video, targetId }) => { const c = socketChat(socket, chatId); if (!c || !c.memberIds.includes(targetId) || targetId === uid) return; io.to(`user:${targetId}`).emit('call:incoming', { chatId, offer, video: !!video, from: publicUser(db.users.find((u) => u.id === uid)) }); });
-  socket.on('call:answer', ({ chatId, answer, targetId }) => { const c = socketChat(socket, chatId); if (c?.memberIds.includes(targetId)) io.to(`user:${targetId}`).emit('call:answer', { chatId, answer, from: uid }); });
-  socket.on('call:ice', ({ chatId, candidate, targetId }) => { const c = socketChat(socket, chatId); if (c?.memberIds.includes(targetId)) io.to(`user:${targetId}`).emit('call:ice', { chatId, candidate, from: uid }); });
-  socket.on('call:end', ({ chatId, targetId }) => { const c = socketChat(socket, chatId); if (c?.memberIds.includes(targetId)) io.to(`user:${targetId}`).emit('call:end', { chatId, from: uid }); });
+  socket.on('call:offer', async ({ chatId, callId: requestedCallId, offer, video, targetId }) => {
+    const c = socketChat(socket, chatId); if (!c || !c.memberIds.includes(targetId) || targetId === uid || !offer) return;
+    const callId = String(requestedCallId || id()); const payload = { callId, chatId, offer, video: !!video, from: publicUser(db.users.find((u) => u.id === uid)) };
+    const pending = { toUserId: targetId, payload, expiresAt: Date.now() + 45000, iceCandidates: [] };
+    pendingCalls.set(callId, pending); setTimeout(() => { if (pendingCalls.get(callId) === pending) pendingCalls.delete(callId); }, 45000);
+    io.to(`user:${targetId}`).emit('call:incoming', payload);
+    await pushToUser(targetId, { callId, chatId, from: payload.from.name, video: !!video }, 45);
+  });
+  socket.on('call:answer', async ({ chatId, callId, answer, targetId }) => { const c = socketChat(socket, chatId); if (c?.memberIds.includes(targetId)) { const pending = callId && pendingCalls.get(callId); if (pending) { pending.iceCandidates.forEach((candidate) => socket.emit('call:ice', { chatId, callId, candidate, from: targetId })); pendingCalls.delete(callId); } io.to(`user:${targetId}`).emit('call:answer', { chatId, callId, answer, from: uid }); socket.to(`user:${uid}`).emit('call:answered-elsewhere', { chatId, callId, from: targetId }); await pushToUser(uid, { callId, dismissed: true }); } });
+  socket.on('call:ice', ({ chatId, callId, candidate, targetId }) => { const c = socketChat(socket, chatId); if (!c?.memberIds.includes(targetId)) return; const pending = callId && pendingCalls.get(callId); if (pending && pending.payload.from.id === uid && pending.toUserId === targetId) pending.iceCandidates.push(candidate); else io.to(`user:${targetId}`).emit('call:ice', { chatId, callId, candidate, from: uid }); });
+  socket.on('call:end', async ({ chatId, callId, targetId }) => { const c = socketChat(socket, chatId); if (!c?.memberIds.includes(targetId)) return; const pending = callId && pendingCalls.get(callId); if (pending?.toUserId === uid) { pendingCalls.delete(callId); socket.to(`user:${uid}`).emit('call:answered-elsewhere', { chatId, callId, from: pending.payload.from.id }); io.to(`user:${targetId}`).emit('call:end', { chatId, callId, from: uid }); await Promise.all([pushToUser(uid, { callId, dismissed: true }), pushToUser(targetId, { callId, dismissed: true })]); } else { if (callId) pendingCalls.delete(callId); io.to(`user:${targetId}`).emit('call:end', { chatId, callId, from: uid }); await pushToUser(targetId, { callId, dismissed: true }); } });
   socket.on('disconnect', async () => { const n = (onlineUsers.get(uid) || 1) - 1; if (n) onlineUsers.set(uid, n); else { onlineUsers.delete(uid); const u = db.users.find((x) => x.id === uid); if (u) { u.lastSeen = new Date().toISOString(); await save(); } emitPresence(uid); } });
 });
 
@@ -154,6 +193,7 @@ async function start() {
     const { rows } = await pool.query('SELECT state FROM whispr_state WHERE id = 1');
     if (rows[0]) db = rows[0].state;
     else await pool.query('INSERT INTO whispr_state (id, state) VALUES (1, $1::jsonb)', [JSON.stringify(db)]);
+    db.pushSubscriptions ||= [];
     console.log('Persistent PostgreSQL storage is active.');
   } else if (process.env.NODE_ENV === 'production') {
     console.warn('DATABASE_URL is not set. Data is using local JSON storage and may be lost on redeploy.');
