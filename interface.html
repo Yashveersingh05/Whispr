@@ -1,1 +1,44 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Whispr — Chat</title><link rel="stylesheet" href="interface.css"><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"></head><body><div class="chat-shell"><aside class="chat-sidebar"><div class="me-row"><button class="me-avatar avatar-button" id="profile-button"><span class="avatar-ph" id="me-initial"></span></button><div class="me-info"><p class="me-name" id="me-name"></p><p class="me-sub" id="me-bio"></p></div><button class="icon-btn-flat" id="logout" aria-label="Log out"><i class="fa-solid fa-right-from-bracket"></i></button></div><div class="sidebar-search"><i class="fa-solid fa-magnifying-glass"></i><input id="chat-search" placeholder="Search chats"><button class="new-chat-btn" id="new-chat"><i class="fa-solid fa-plus"></i></button></div><div class="chat-tabs"><button class="chat-tab active" data-filter="all">All</button><button class="chat-tab" data-filter="online">Online</button></div><div class="chat-list" id="chat-list"></div></aside><main class="chat-main"><header class="chat-main-header" id="chat-header"><div class="empty-header">Choose a conversation</div></header><div class="chat-messages" id="messages"><div class="empty-state">Choose a chat or start a new conversation.</div></div><form class="chat-input-row" id="message-form"><button type="button" class="icon-btn-flat" id="file-button" disabled><i class="fa-solid fa-paperclip"></i></button><input id="file-input" type="file" hidden><input class="chat-input" id="message-input" placeholder="Type a message…" disabled><button class="send-btn" disabled><i class="fa-solid fa-paper-plane"></i></button></form></main><aside class="chat-profile"><div id="conversation-info" class="profile-head"><p class="profile-name">Conversation details</p><p class="profile-status">Select a chat to see contact information and shared media.</p></div><div class="profile-section"><div class="profile-section-head"><h4>Shared media & files</h4></div><div id="files" class="file-list"></div></div><button class="danger-button" id="report" disabled>Report conversation</button></aside></div><dialog id="new-chat-dialog"><form method="dialog" id="new-chat-form"><h2>New conversation</h2><input id="user-picker" placeholder="Search by name or email"><div id="user-results"></div><menu><button value="cancel">Cancel</button><button id="create-chat" disabled>Start chat</button></menu></form></dialog><dialog id="profile-dialog"><form method="dialog" id="profile-form"><h2>Your profile</h2><label>Profile photo <input type="file" id="avatar-input" accept="image/*"></label><label>Name <input id="profile-name" required></label><label>About <textarea id="profile-bio" maxlength="160"></textarea></label><p id="profile-error"></p><menu><button value="cancel">Cancel</button><button>Save profile</button></menu></form></dialog><dialog id="call-dialog"><div class="call-content"><video id="remote-video" autoplay playsinline></video><video id="local-video" autoplay muted playsinline></video><h2 id="call-title">Calling…</h2><div class="call-actions"><button id="toggle-mic">Mute</button><button id="toggle-camera">Camera</button><button id="end-call" class="danger-button">End call</button></div></div></dialog><script src="/socket.io/socket.io.js"></script><script src="app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Whispr — Chat</title>
+  <link rel="stylesheet" href="interface.css"><link rel="stylesheet" href="app.css?v=final-3">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+</head>
+<body>
+  <div class="chat-shell">
+    <aside class="chat-sidebar" aria-label="Chats">
+      <div class="me-row">
+        <button class="me-avatar avatar-button" id="profile-button" aria-label="Edit your profile"><span class="avatar-ph" id="me-initial"></span></button>
+        <div class="me-info"><p class="me-name" id="me-name"></p><p class="me-sub" id="me-bio"></p></div>
+        <button class="icon-btn-flat" id="logout" aria-label="Log out"><i class="fa-solid fa-right-from-bracket"></i></button>
+      </div>
+      <div class="sidebar-search"><i class="fa-solid fa-magnifying-glass"></i><input id="chat-search" placeholder="Search chats" aria-label="Search chats"><button class="new-chat-btn" id="new-chat" aria-label="New chat or group"><i class="fa-solid fa-plus"></i></button></div>
+      <div class="chat-tabs" role="tablist"><button class="chat-tab active" data-filter="all" role="tab" aria-selected="true">All</button><button class="chat-tab" data-filter="online" role="tab" aria-selected="false">Online</button></div>
+      <div class="chat-list" id="chat-list" aria-live="polite"></div>
+    </aside>
+    <main class="chat-main">
+      <header class="chat-main-header" id="chat-header"><div class="empty-header">Choose a conversation</div></header>
+      <div class="chat-messages" id="messages" aria-live="polite"><p class="empty-state">Choose a chat or start a new conversation.</p></div>
+      <form class="chat-input-row" id="message-form" autocomplete="off">
+        <div class="emoji-wrap"><button type="button" class="icon-btn-flat" id="emoji-toggle" aria-label="Choose emoji" disabled><i class="fa-regular fa-face-smile"></i></button><div id="emoji-picker" class="emoji-picker" hidden></div></div>
+        <button type="button" class="icon-btn-flat" id="file-button" aria-label="Attach media or file" disabled><i class="fa-solid fa-paperclip"></i></button>
+        <input id="file-input" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" hidden>
+        <button type="button" class="icon-btn-flat" id="voice-record" aria-label="Record voice message" disabled><i class="fa-solid fa-microphone"></i></button>
+        <input class="chat-input" id="message-input" placeholder="Type a message…" aria-label="Message" disabled>
+        <button class="send-btn" aria-label="Send message" disabled><i class="fa-solid fa-paper-plane"></i></button>
+      </form>
+    </main>
+    <aside class="chat-profile" aria-label="Conversation information">
+      <div id="conversation-info" class="profile-head"><p class="profile-name">Conversation details</p><p class="profile-status">Select a chat to see contact information and shared media.</p></div>
+      <div class="profile-section"><div class="profile-section-head"><h4>Shared media &amp; files</h4></div><div id="files" class="file-list"></div></div>
+      <button class="danger-button" id="report" disabled>Report conversation</button>
+    </aside>
+  </div>
+  <dialog id="new-chat-dialog"><form method="dialog" id="new-chat-form"><h2>New chat or group</h2><label for="user-picker">Find people</label><input id="user-picker" placeholder="Search by name or email" autocomplete="off"><p class="dialog-hint">Select one person for a direct chat, or several to start a group.</p><label for="group-name" id="group-name-label" hidden>Group name</label><input id="group-name" placeholder="Group name" hidden maxlength="60"><div id="user-results"></div><menu><button value="cancel">Cancel</button><button id="create-chat" disabled>Start chat</button></menu></form></dialog>
+  <dialog id="profile-dialog"><form method="dialog" id="profile-form"><h2>Your profile</h2><label>Profile photo<input type="file" id="avatar-input" accept="image/jpeg,image/png,image/gif,image/webp,image/avif"></label><label>Name<input id="profile-name" required maxlength="60"></label><label>About<textarea id="profile-bio" maxlength="160"></textarea></label><p id="profile-error" role="alert"></p><menu><button value="cancel">Cancel</button><button>Save profile</button></menu></form></dialog>
+  <dialog id="call-dialog"><div class="call-content"><video id="remote-video" autoplay playsinline></video><video id="local-video" autoplay muted playsinline></video><h2 id="call-title">Calling…</h2><div class="call-actions"><button id="toggle-mic">Mute</button><button id="toggle-camera">Camera off</button><button id="end-call" class="danger-button">End call</button></div></div></dialog>
+  <script src="/socket.io/socket.io.js"></script><script src="app.js?v=final-3"></script>
+</body>
+</html>

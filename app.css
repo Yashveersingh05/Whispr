@@ -240,3 +240,45 @@ dialog input,dialog textarea { border:2px solid #111; border-radius:0; backgroun
 #call-dialog.audio-only #call-title { margin:auto; font-size:clamp(1.5rem,5vw,3rem); }
 #call-dialog #end-call { color:#fff; background:#dc2626; }
 @media(max-width:520px) { #call-dialog .call-content { padding:12px; } #call-dialog #local-video { top:12px; right:12px; } #call-dialog #remote-video { max-height:calc(100dvh - 130px); } }
+
+/* Keep contact details in a vertical stack and give attachment messages room. */
+.chat-profile { gap:0; padding:22px 16px; }
+#conversation-info { display:block; flex:none; padding:10px 4px 20px; text-align:center; }
+#conversation-info .profile-avatar { display:grid; place-items:center; margin:0 auto 14px; }
+#conversation-info .profile-name { display:block; line-height:1.2; margin:0 auto 8px; color:#111; }
+#conversation-info .profile-status { display:block; line-height:1.45; margin:4px 0; overflow-wrap:anywhere; }
+.profile-section { flex:none; margin-top:20px; padding-top:18px; border-top:2px solid #111!important; }
+.profile-section-head h4 { color:#111; line-height:1.4; }
+.file-list { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.media-preview { width:100%; height:auto; aspect-ratio:1; margin:0; overflow:hidden; border:2px solid #111; }
+.media-preview img { display:block; width:100%; height:100%; object-fit:cover; border-radius:0; }
+.file-link { grid-column:1/-1; border:1px solid #111; color:#111; overflow-wrap:anywhere; }
+.inline-image { display:block; width:min(100%,340px); max-height:300px; object-fit:contain; border:2px solid #111; background:#fff; }
+.inline-video { display:block; width:min(100%,360px); max-height:280px; background:#111; }
+.inline-audio { width:min(100%,320px); }
+.inline-document { display:flex; gap:12px; align-items:center; min-width:180px; padding:12px; border:2px solid #111; background:#fff; color:#111; font-weight:800; overflow-wrap:anywhere; }
+.inline-document i { font-size:1.4rem; }
+.inline-document small { display:block; font-weight:500; }
+.attachment-name { margin-top:7px; font-size:.8rem; overflow-wrap:anywhere; }
+.delivery-state { display:block; margin-top:4px; text-align:right; color:#39362f; font-size:.68rem; font-weight:600; }
+.send-failed .delivery-state { color:#b42318; }
+.chat-item-top small,.msg-meta time { flex:none; color:#39362f; }
+button:disabled { opacity:.62; cursor:not-allowed; filter:grayscale(.4); }
+.icon-btn-round,.icon-btn-flat,.new-chat-btn,.send-btn,.back-button { color:#111; }
+.profile-section-head h4,.chat-main-status,.me-sub,.profile-status,.chat-preview { color:#343129; }
+.file-button.uploading { color:#7c3aed; animation:upload-pulse .8s ease-in-out infinite alternate; }
+@keyframes upload-pulse { to { transform:scale(1.15) rotate(-12deg); } }
+@media(max-width:1024px) { .chat-shell { grid-template-columns:minmax(250px,300px) minmax(0,1fr); } .chat-profile { display:none; } }
+
+/* Composer controls stay legible and reachable, including the floating emoji tray. */
+.emoji-wrap { position:relative; display:flex; align-items:center; }
+.emoji-picker { position:absolute; z-index:20; left:0; bottom:calc(100% + 12px); display:grid; grid-template-columns:repeat(5,40px); gap:4px; padding:10px; border:2px solid #111; background:#fffdf7; box-shadow:4px 4px 0 #111; }
+.emoji-picker[hidden] { display:none; }
+.emoji-picker button { width:40px; height:40px; border:1px solid #111; background:#fff; font-size:21px; cursor:pointer; }
+.emoji-picker button:hover,.emoji-picker button:focus-visible { background:#c8ff00; outline:2px solid #111; }
+#voice-record.recording { color:#fff; background:#d92d20; border:2px solid #111; animation:record-pulse .8s ease-in-out infinite alternate; }
+@keyframes record-pulse { to { transform:scale(1.09); box-shadow:0 0 0 5px #d92d2038; } }
+.chat-main-actions .icon-btn-round { flex:0 0 42px; width:42px; height:42px; border:2px solid #111; color:#111; background:#fffdf7; box-shadow:2px 2px 0 #111; }
+.chat-main-actions .icon-btn-round:hover { transform:translate(-1px,-1px); background:#c8ff00; box-shadow:3px 3px 0 #111; }
+.chat-main-actions .icon-btn-round[hidden] { display:none; }
+@media(max-width:520px) { .chat-main-actions .icon-btn-round { flex-basis:36px; width:36px; height:36px; } .emoji-picker { grid-template-columns:repeat(5,36px); } .emoji-picker button { width:36px; height:36px; } }

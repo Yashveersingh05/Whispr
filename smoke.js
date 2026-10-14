@@ -7,7 +7,7 @@ import { io as connect } from 'socket.io-client';
 const dataDirectory = await mkdtemp(path.join(tmpdir(), 'whispr-smoke-'));
 const port = 32000 + Math.floor(Math.random() * 20000);
 const origin = `http://127.0.0.1:${port}`;
-const child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), JWT_SECRET: 'smoke-test-only-secret', DB_FILE: path.join(dataDirectory, 'state.json') }, stdio: 'ignore' });
+const child = spawn(process.execPath, ['server.js'], { cwd: process.cwd(), env: { ...process.env, PORT: String(port), JWT_SECRET: 'smoke-test-only-secret', DB_FILE: path.join(dataDirectory, 'state.json'), UPLOAD_DIR: path.join(dataDirectory, 'uploads') }, stdio: 'ignore' });
 let aliceSocket;
 let bobSocket;
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
@@ -26,8 +26,26 @@ try {
   const chat = await request('/api/chats', alice.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberIds: [bob.user.id] }) });
 
   const messageReceived = waitFor(bobSocket, 'message:new');
-  await request(`/api/chats/${chat.id}/messages`, alice.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: 'live delivery' }) });
+  const messageOptions = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body: 'live delivery', clientId: 'smoke-message-once' }) };
+  const sentMessage = await request(`/api/chats/${chat.id}/messages`, alice.token, messageOptions);
   assert((await messageReceived).body === 'live delivery', 'new chat message did not reach the other participant');
+  const retriedMessage = await request(`/api/chats/${chat.id}/messages`, alice.token, messageOptions);
+  assert(retriedMessage.id === sentMessage.id, 'retrying a message created a duplicate');
+
+  const fileReceived = waitFor(bobSocket, 'file:new');
+  const upload = new FormData();
+  upload.append('file', new Blob(['image fixture'], { type: 'image/png' }), 'preview.png');
+  const uploaded = await request(`/api/chats/${chat.id}/files`, alice.token, { method: 'POST', body: upload });
+  assert((await fileReceived).id === uploaded.id, 'uploaded media did not reach the other participant in realtime');
+  const shared = (await request(`/api/chats/${chat.id}/files`, bob.token)).find((file) => file.id === uploaded.id);
+  assert(shared?.url, 'shared media list did not return a signed media URL');
+  const mediaResponse = await fetch(new URL(shared.url, origin));
+  assert(mediaResponse.ok, 'signed media could not be downloaded by a chat member');
+  assert(mediaResponse.headers.get('content-type')?.startsWith('image/png'), 'uploaded media did not preserve its MIME type');
+  assert((await fetch(new URL(`/media/${uploaded.id}?token=invalid`, origin))).status === 401, 'invalid media signatures were not rejected');
+  const group = await request('/api/chats', alice.token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ memberIds: [bob.user.id], isGroup: true, name: 'Smoke group' }) });
+  assert(group.isGroup && group.title === 'Smoke group', 'group chat creation failed');
+  assert((await fetch(`${origin}/data/whispr.json`)).status === 404, 'private application state is publicly exposed');
 
   const incomingCall = waitFor(bobSocket, 'call:incoming');
   aliceSocket.emit('call:offer', { chatId: chat.id, targetId: bob.user.id, video: true, offer: { type: 'offer', sdp: 'smoke' } });
@@ -42,7 +60,7 @@ try {
   const profile = await request('/api/me', alice.token);
   assert(profile.bio === 'Available for testing', 'profile changes were not persisted');
   assert(Array.isArray((await request('/api/rtc-config', alice.token)).iceServers), 'RTC configuration is not available');
-  console.log('PASS: auth, profile persistence, chat creation, realtime messages, call offer/answer/ICE routing, and RTC configuration');
+  console.log('PASS: auth, profile persistence, direct and group chat creation, realtime messages, idempotent retries, signed media, call signaling, and RTC configuration');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

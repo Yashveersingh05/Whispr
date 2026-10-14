@@ -13,7 +13,7 @@ import pg from 'pg';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = path.join(root, 'data');
-const uploadDir = path.join(root, 'uploads');
+const uploadDir = process.env.UPLOAD_DIR || path.join(root, 'uploads');
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(uploadDir, { recursive: true });
 const dbPath = process.env.DB_FILE || path.join(dataDir, 'whispr.json');
@@ -38,9 +38,10 @@ const save = () => {
   return saveQueue;
 };
 const id = () => crypto.randomUUID();
-const publicUser = (u) => u && ({ id: u.id, name: u.name, email: u.email, avatar: u.avatar || null, bio: u.bio || '', role: u.role, createdAt: u.createdAt, online: onlineUsers.has(u.id), lastSeen: u.lastSeen || null });
+const publicUser = (u) => u && ({ id: u.id, name: u.name, email: u.email, avatar: u.avatar ? `/avatars/${u.id}` : null, bio: u.bio || '', role: u.role, createdAt: u.createdAt, online: onlineUsers.has(u.id), lastSeen: u.lastSeen || null });
 const onlineUsers = new Map();
 const tokenFor = (u) => jwt.sign({ id: u.id }, secret, { expiresIn: '7d' });
+const mediaUrl = (file, userId) => `/media/${file.id}?token=${encodeURIComponent(jwt.sign({ scope: 'media', fileId: file.id, userId }, secret, { expiresIn: '30m' }))}`;
 const getUser = (req) => db.users.find((u) => u.id === req.user.id);
 const members = (chat) => chat.memberIds.map((memberId) => db.users.find((u) => u.id === memberId)).filter(Boolean);
 const peer = (chat, userId) => members(chat).find((u) => u.id !== userId);
@@ -58,7 +59,9 @@ function emitPresence(userId) { io.emit('presence', { userId, online: onlineUser
 function socketChat(socket, chatId) { return db.chats.find((c) => c.id === chatId && c.memberIds.includes(socket.user.id)); }
 
 app.use(express.json());
-app.use('/uploads', express.static(uploadDir));
+app.get('/avatars/:userId', (req, res) => { const user = db.users.find((u) => u.id === req.params.userId && u.avatar); if (!user) return res.sendStatus(404); res.sendFile(path.join(uploadDir, path.basename(user.avatar)), { headers: { 'Content-Type': user.avatarMime || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=60' } }); });
+app.get('/media/:fileId', (req, res) => { try { const claims = jwt.verify(req.query.token, secret); const file = db.files.find((item) => item.id === req.params.fileId && item.id === claims.fileId); const chat = db.chats.find((item) => item.id === file?.chatId && item.memberIds.includes(claims.userId)); if (claims.scope !== 'media' || !file || !chat) return res.sendStatus(404); const storedName = file.storageName || path.basename(file.url || ''); if (!storedName) return res.sendStatus(404); res.sendFile(path.join(uploadDir, storedName), { headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=60' } }); } catch { res.sendStatus(401); } });
+app.use((req, res, next) => { if (/^\/(data|uploads|node_modules|\.git)(\/|$)/.test(req.path) || ['/server.js', '/smoke.js', '/package.json', '/package-lock.json', '/render.yaml', '/README.md'].includes(req.path)) return res.sendStatus(404); next(); });
 app.use(express.static(root));
 app.get('/', (req, res) => res.sendFile(path.join(root, 'login.html')));
 
@@ -87,7 +90,7 @@ app.get('/api/rtc-config', authorize, (req, res) => {
   res.set('Cache-Control', 'no-store').json({ iceServers });
 });
 app.patch('/api/me', authorize, async (req, res) => { const u = getUser(req); const name = String(req.body.name || '').trim(); if (!name) return res.status(400).json({ error: 'Name is required.' }); u.name = name; u.bio = String(req.body.bio || '').trim().slice(0, 160); await save(); res.json(publicUser(u)); });
-app.post('/api/me/avatar', authorize, upload.single('avatar'), async (req, res) => { if (!req.file || !req.file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'Choose an image file.' }); const u = getUser(req); u.avatar = `/uploads/${req.file.filename}`; await save(); res.json(publicUser(u)); });
+app.post('/api/me/avatar', authorize, upload.single('avatar'), async (req, res) => { if (!req.file || !['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif'].includes(req.file.mimetype)) return res.status(400).json({ error: 'Choose a JPEG, PNG, GIF, WebP, or AVIF image.' }); const u = getUser(req); u.avatar = `/uploads/${req.file.filename}`; u.avatarMime = req.file.mimetype; await save(); res.json(publicUser(u)); });
 
 app.get('/api/users', authorize, (req, res) => { const q = String(req.query.q || '').toLowerCase(); res.json(db.users.filter((u) => u.id !== req.user.id && (!q || u.name.toLowerCase().includes(q) || u.email.includes(q))).map(publicUser)); });
 app.get('/api/chats', authorize, (req, res) => {
@@ -98,7 +101,7 @@ app.get('/api/chats', authorize, (req, res) => {
 app.post('/api/chats', authorize, async (req, res) => {
   const ids = [...new Set([req.user.id, ...(req.body.memberIds || [])])];
   if (ids.length < 2 || ids.some((x) => !db.users.some((u) => u.id === x))) return res.status(400).json({ error: 'Select at least one valid person.' });
-  const isGroup = ids.length > 2 || !!String(req.body.name || '').trim();
+  const isGroup = !!req.body.isGroup || ids.length > 2 || !!String(req.body.name || '').trim();
   let chat = !isGroup && db.chats.find((c) => !c.isGroup && c.memberIds.length === 2 && ids.every((x) => c.memberIds.includes(x)));
   if (!chat) { chat = { id: id(), memberIds: ids, isGroup, name: isGroup ? String(req.body.name || '').trim() || 'Untitled group' : null, createdAt: new Date().toISOString() }; db.chats.push(chat); await save(); }
   for (const memberId of ids) io.in(`user:${memberId}`).socketsJoin(`chat:${chat.id}`);
@@ -108,14 +111,17 @@ app.get('/api/chats/:chatId/messages', authorize, (req, res) => { const c = db.c
 app.post('/api/chats/:chatId/messages', authorize, async (req, res) => {
   const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); const body = String(req.body.body || '').trim();
   if (!c) return res.status(404).json({ error: 'Chat not found.' }); if (!body) return res.status(400).json({ error: 'Message cannot be empty.' });
-  const message = { id: id(), chatId: c.id, senderId: req.user.id, body, createdAt: new Date().toISOString() }; db.messages.push(message); await save();
+  const clientId = String(req.body.clientId || '').slice(0, 80);
+  const existing = clientId && db.messages.find((m) => m.chatId === c.id && m.senderId === req.user.id && m.clientId === clientId);
+  if (existing) return res.json({ ...existing, sender: publicUser(db.users.find((u) => u.id === existing.senderId)) });
+  const message = { id: id(), clientId: clientId || null, chatId: c.id, senderId: req.user.id, body, createdAt: new Date().toISOString() }; db.messages.push(message); await save();
   const result = { ...message, sender: publicUser(getUser(req)) }; io.to(`chat:${c.id}`).emit('message:new', result); res.status(201).json(result);
 });
-app.post('/api/chats/:chatId/files', authorize, upload.single('file'), async (req, res) => {
+app.post('/api/chats/:chatId/files', authorize, (req, res, next) => { if (!db.chats.some((chat) => chat.id === req.params.chatId && chat.memberIds.includes(req.user.id))) return res.status(404).json({ error: 'Chat not found.' }); next(); }, upload.single('file'), async (req, res) => {
   const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c || !req.file) return res.status(400).json({ error: 'A chat and file are required.' });
-  const file = { id: id(), chatId: c.id, senderId: req.user.id, name: req.file.originalname, type: req.file.mimetype, size: req.file.size, url: `/uploads/${req.file.filename}`, createdAt: new Date().toISOString() }; db.files.push(file); await save(); io.to(`chat:${c.id}`).emit('file:new', file); res.status(201).json(file);
+  const file = { id: id(), chatId: c.id, senderId: req.user.id, senderName: getUser(req).name, name: req.file.originalname, type: req.file.mimetype, size: req.file.size, storageName: req.file.filename, createdAt: new Date().toISOString() }; db.files.push(file); await save(); io.to(`chat:${c.id}`).emit('file:new', { ...file, url: undefined }); res.status(201).json({ ...file, url: mediaUrl(file, req.user.id) });
 });
-app.get('/api/chats/:chatId/files', authorize, (req, res) => { const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c) return res.status(404).json({ error: 'Chat not found.' }); res.json(db.files.filter((f) => f.chatId === c.id)); });
+app.get('/api/chats/:chatId/files', authorize, (req, res) => { const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c) return res.status(404).json({ error: 'Chat not found.' }); res.json(db.files.filter((f) => f.chatId === c.id).map((file) => ({ ...file, url: mediaUrl(file, req.user.id) }))); });
 app.post('/api/chats/:chatId/report', authorize, async (req, res) => { const c = db.chats.find((x) => x.id === req.params.chatId && x.memberIds.includes(req.user.id)); if (!c) return res.status(404).json({ error: 'Chat not found.' }); db.reports.push({ id: id(), chatId: c.id, reporterId: req.user.id, reason: String(req.body.reason || '').trim(), createdAt: new Date().toISOString(), status: 'open' }); await save(); res.status(201).json({ ok: true }); });
 
 app.get('/api/admin/summary', authorize, admin, (req,res) => res.json({ users: db.users.length, online: onlineUsers.size, chats: db.chats.length, messages: db.messages.length, reports: db.reports.filter((r) => r.status === 'open').length }));
