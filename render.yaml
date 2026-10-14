@@ -9,3 +9,9 @@ services:
     envVars:
       - key: JWT_SECRET
         generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: TURN_URL
+        sync: false
+      - key: TURN_SHARED_SECRET
+        sync: false
