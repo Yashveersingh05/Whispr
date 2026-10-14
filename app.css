@@ -142,3 +142,16 @@ dialog button {
 .msg-bubble a {
     color: inherit
 }
+
+.avatar-button { border: 0; background: transparent; cursor: pointer }
+.avatar-ph img, .profile-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50% }
+.chat-main-actions { margin-left: auto; display: flex; gap: .5rem }
+.media-preview { display: inline-block; width: 76px; height: 76px; margin: .2rem }
+.media-preview img { width: 100%; height: 100%; object-fit: cover; border-radius: .5rem }
+.file-link { display: block }
+.call-content { min-width: min(760px, 90vw); min-height: 360px; background: #111827; color: #fff; padding: 1rem; text-align: center }
+.call-content video { max-width: 68%; max-height: 48vh; background: #000; border-radius: .5rem }
+.call-content #local-video { position: absolute; right: 2rem; bottom: 4rem; width: 160px; max-height: 120px }
+.call-actions { display: flex; justify-content: center; gap: .75rem; margin-top: 1rem }
+.call-actions button { border-radius: .5rem; border: 0; padding: .7rem 1rem }
+textarea { width: 100%; min-height: 80px; box-sizing: border-box; padding: .6rem }
